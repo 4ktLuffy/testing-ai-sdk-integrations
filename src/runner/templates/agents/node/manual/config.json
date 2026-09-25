@@ -3,5 +3,5 @@
   "platform": "node",
   "dependencies": [],
   "versions": ["1.0.0"],
-  "sentryVersions": ["10"]
+  "sentryVersions": ["11"]
 }

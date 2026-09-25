@@ -119,7 +119,7 @@ test("Cloudflare LangGraph uses explicit edge instrumentation", () => {
 		category: "agents",
 		framework: "langgraph",
 		frameworkVersions: ["1"],
-		sentryVersions: ["10"],
+		sentryVersions: ["11"],
 		streamingMode: "both",
 		options: { provider: ["openai"] },
 	};
@@ -142,7 +142,7 @@ test("Next.js always enables Vercel experimental telemetry", () => {
 		category: "agents",
 		framework: "vercel",
 		frameworkVersions: ["7.0.79"],
-		sentryVersions: ["10"],
+		sentryVersions: ["11"],
 		streamingMode: "both",
 		options: { agentStyle: ["class"], provider: ["openai"] },
 		versionTemplateOptions: { "7.0.79": { apiStyle: "v7" } },

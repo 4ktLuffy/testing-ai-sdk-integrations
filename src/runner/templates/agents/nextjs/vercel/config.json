@@ -41,7 +41,7 @@
       }
     }
   },
-  "sentryVersions": ["10"],
+  "sentryVersions": ["11"],
   "options": {
     "agentStyle": ["function", "class"],
     "provider": [

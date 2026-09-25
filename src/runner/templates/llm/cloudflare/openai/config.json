@@ -12,5 +12,5 @@
     }
   ],
   "versions": ["7"],
-  "sentryVersions": ["10"]
+  "sentryVersions": ["11"]
 }

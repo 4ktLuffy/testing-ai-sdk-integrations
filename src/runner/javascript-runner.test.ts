@@ -10,7 +10,7 @@ const framework: AssessmentEnvironmentContext["framework"] = {
 	name: "vercel",
 	platform: "nextjs",
 	version: "6",
-	sentryVersion: "10",
+	sentryVersion: "11",
 	dependencies: [
 		{ package: "ai", version: "framework" },
 		{ package: "@sentry/nextjs", version: "sentry" },

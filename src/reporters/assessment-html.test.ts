@@ -54,7 +54,7 @@ function report(): AssessmentReport {
 							options: {},
 						},
 						resolvedFrameworkVersion: "7.7.0",
-						resolvedSentryVersion: "10.42.0",
+						resolvedSentryVersion: "11.0.0",
 						completion: "complete",
 						health: "healthy",
 						score: 100,
@@ -109,7 +109,7 @@ test("HTML reporting is pure and displays requested and resolved versions", asyn
 	const before = structuredClone(assessment);
 	const html = renderAssessmentHtml(assessment);
 	assert.match(html, /7\.7\.0/);
-	assert.match(html, /10\.42\.0/);
+	assert.match(html, /11\.0\.0/);
 	assert.match(html, /requested framework/);
 	assert.match(html, /requested sentry/);
 	assert.match(html, /blocking \+ streaming/);
@@ -138,7 +138,7 @@ test("HTML reporting is pure and displays requested and resolved versions", asyn
 	);
 	assert.match(
 		html,
-		/data-variant-link aria-label="Link to Sentry v10 variant 1"/,
+		/data-variant-link aria-label="Link to Sentry v11 variant 1"/,
 	);
 	assert.match(html, /function revealVariant/);
 	assert.match(html, /revealHash\(location\.hash\.slice\(1\)\)/);
@@ -151,7 +151,7 @@ test("HTML reporting is pure and displays requested and resolved versions", asyn
 	const directory = await mkdtemp(path.join(os.tmpdir(), "assessment-html-"));
 	try {
 		const output = await writeAssessmentHtml(assessment, directory);
-		assert.match(await readFile(output, "utf8"), /10\.42\.0/);
+		assert.match(await readFile(output, "utf8"), /11\.0\.0/);
 		assert.deepEqual(assessment, before);
 	} finally {
 		await rm(directory, { recursive: true, force: true });
