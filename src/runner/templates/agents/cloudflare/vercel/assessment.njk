@@ -1,11 +1,7 @@
 {% extends "base.cloudflare.assessment.njk" %}
 
 {% block sentry_import %}
-{% if apiStyle == "v7" %}
 import * as Sentry from "@sentry/cloudflare/nodejs_compat";
-{% else %}
-import * as Sentry from "@sentry/cloudflare";
-{% endif %}
 {% endblock %}
 
 {% block sentry_integrations %}
@@ -14,21 +10,9 @@ import * as Sentry from "@sentry/cloudflare";
 
 {% block dynamic_imports %}
 {% if agentStyle == "class" %}
-{% if apiStyle == "v7" %}
 const { ToolLoopAgent, isStepCount, jsonSchema, tool } = await import("ai");
-const stopAfterSteps = isStepCount;
 {% else %}
-const { ToolLoopAgent, jsonSchema, stepCountIs, tool } = await import("ai");
-const stopAfterSteps = stepCountIs;
-{% endif %}
-{% else %}
-{% if apiStyle == "v7" %}
 const { generateText, isStepCount, jsonSchema, streamText, tool } = await import("ai");
-const stopAfterSteps = isStepCount;
-{% else %}
-const { generateText, jsonSchema, stepCountIs, streamText, tool } = await import("ai");
-const stopAfterSteps = stepCountIs;
-{% endif %}
 {% endif %}
 {% if provider == "anthropic" %}
 const { createAnthropic } = await import("@ai-sdk/anthropic");
@@ -64,12 +48,8 @@ const provider = createOpenAI({ apiKey: env.OPENROUTER_API_KEY, baseURL: "https:
                 model: provider(request.model),
                 instructions: system,
                 tools,
-                stopWhen: stopAfterSteps(10),
-{% if apiStyle == "v7" %}
+                stopWhen: isStepCount(10),
                 telemetry: { isEnabled: true, functionId: probe.id, recordInputs: true, recordOutputs: true },
-{% else %}
-                experimental_telemetry: { isEnabled: true, functionId: probe.id, recordInputs: true, recordOutputs: true },
-{% endif %}
               });
               if (request.streaming) {
                 const response = await agent.stream({ prompt });
@@ -86,12 +66,8 @@ const provider = createOpenAI({ apiKey: env.OPENROUTER_API_KEY, baseURL: "https:
                   system,
                   prompt,
                   tools,
-                  stopWhen: stopAfterSteps(10),
-{% if apiStyle == "v7" %}
+                  stopWhen: isStepCount(10),
                   telemetry: { isEnabled: true, functionId: probe.id, recordInputs: true, recordOutputs: true },
-{% else %}
-                  experimental_telemetry: { isEnabled: true, functionId: probe.id, recordInputs: true, recordOutputs: true },
-{% endif %}
                 });
                 for await (const _chunk of response.textStream) {
                   // Consume the response to complete the instrumented operation.
@@ -102,12 +78,8 @@ const provider = createOpenAI({ apiKey: env.OPENROUTER_API_KEY, baseURL: "https:
                   system,
                   prompt,
                   tools,
-                  stopWhen: stopAfterSteps(10),
-{% if apiStyle == "v7" %}
+                  stopWhen: isStepCount(10),
                   telemetry: { isEnabled: true, functionId: probe.id, recordInputs: true, recordOutputs: true },
-{% else %}
-                  experimental_telemetry: { isEnabled: true, functionId: probe.id, recordInputs: true, recordOutputs: true },
-{% endif %}
                 });
               }
 {% endif %}

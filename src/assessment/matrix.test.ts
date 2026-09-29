@@ -71,46 +71,38 @@ test("framework versions can override companion dependency versions", () => {
 	const dependencies = resolveFrameworkDependencies(
 		{
 			dependencies: [
-				{ package: "ai", version: "framework" },
-				{ package: "@ai-sdk/openai", version: "3.0.90" },
+				{ package: "example-sdk", version: "framework" },
+				{ package: "example-provider", version: "3" },
 			],
 			versionOverrides: {
-				"7.0.79": { dependencies: { "@ai-sdk/openai": "4.0.47" } },
+				"7": { dependencies: { "example-provider": "4" } },
 			},
 		},
-		"7.0.79",
+		"7",
 	);
 
 	assert.deepEqual(dependencies, [
-		{ package: "ai", version: "framework" },
-		{ package: "@ai-sdk/openai", version: "4.0.47" },
+		{ package: "example-sdk", version: "framework" },
+		{ package: "example-provider", version: "4" },
 	]);
 });
 
-test("version template options select the matching Vercel API", () => {
+test("Vercel renders the current agent API", () => {
 	const vercelTarget: AssessmentTargetConfig = {
 		platform: "node",
 		category: "agents",
 		framework: "vercel",
-		frameworkVersions: ["6.0.116", "7.0.79"],
-		sentryVersions: ["latest"],
+		frameworkVersions: ["7"],
+		sentryVersions: ["11"],
 		streamingMode: "both",
 		options: { agentStyle: ["class"], provider: ["openai"] },
-		versionTemplateOptions: {
-			"6.0.116": { apiStyle: "v6" },
-			"7.0.79": { apiStyle: "v7" },
-		},
 	};
-	const variants = resolveVariants(vercelTarget);
-	const v6 = renderAssessmentProgram(vercelTarget, variants[0]).contents;
-	const v7 = renderAssessmentProgram(vercelTarget, variants[1]).contents;
+	const [variant] = resolveVariants(vercelTarget);
+	const program = renderAssessmentProgram(vercelTarget, variant).contents;
 
-	assert.match(v6, /stepCountIs/);
-	assert.match(v6, /experimental_telemetry/);
-	assert.doesNotMatch(v6, /isStepCount/);
-	assert.match(v7, /isStepCount/);
-	assert.match(v7, /\n\s*telemetry:/);
-	assert.doesNotMatch(v7, /experimental_telemetry/);
+	assert.match(program, /isStepCount/);
+	assert.match(program, /\n\s*telemetry:/);
+	assert.doesNotMatch(program, /experimental_telemetry/);
 });
 
 test("Cloudflare LangGraph uses explicit edge instrumentation", () => {
@@ -141,11 +133,10 @@ test("Next.js always enables Vercel experimental telemetry", () => {
 		platform: "nextjs",
 		category: "agents",
 		framework: "vercel",
-		frameworkVersions: ["7.0.79"],
+		frameworkVersions: ["7"],
 		sentryVersions: ["11"],
 		streamingMode: "both",
 		options: { agentStyle: ["class"], provider: ["openai"] },
-		versionTemplateOptions: { "7.0.79": { apiStyle: "v7" } },
 	};
 	const [variant] = resolveVariants(vercelTarget);
 	const program = renderAssessmentProgram(vercelTarget, variant).contents;

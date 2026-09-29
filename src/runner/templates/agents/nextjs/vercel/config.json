@@ -9,11 +9,11 @@
     },
     {
       "package": "@ai-sdk/openai",
-      "version": "3.0.90"
+      "version": "4.0.47"
     },
     {
       "package": "@ai-sdk/anthropic",
-      "version": "3.0.105"
+      "version": "4.0.42"
     },
     {
       "package": "@sentry/nextjs",
@@ -24,23 +24,7 @@
       "version": "latest"
     }
   ],
-  "versions": ["6", "7"],
-  "versionOverrides": {
-    "6": {
-      "templateOptions": {
-        "apiStyle": "v6"
-      }
-    },
-    "7": {
-      "dependencies": {
-        "@ai-sdk/openai": "4.0.47",
-        "@ai-sdk/anthropic": "4.0.42"
-      },
-      "templateOptions": {
-        "apiStyle": "v7"
-      }
-    }
-  },
+  "versions": ["7"],
   "sentryVersions": ["11"],
   "options": {
     "agentStyle": ["function", "class"],

@@ -2,21 +2,9 @@
 
 {% block dynamic_imports %}
 {% if agentStyle == "class" %}
-{% if apiStyle == "v7" %}
 const { ToolLoopAgent, isStepCount, jsonSchema, tool } = await import("ai");
-const stopAfterSteps = isStepCount;
 {% else %}
-const { ToolLoopAgent, jsonSchema, stepCountIs, tool } = await import("ai");
-const stopAfterSteps = stepCountIs;
-{% endif %}
-{% else %}
-{% if apiStyle == "v7" %}
 const { generateText, isStepCount, jsonSchema, streamText, tool } = await import("ai");
-const stopAfterSteps = isStepCount;
-{% else %}
-const { generateText, jsonSchema, stepCountIs, streamText, tool } = await import("ai");
-const stopAfterSteps = stepCountIs;
-{% endif %}
 {% endif %}
 {% if provider == "anthropic" %}
 const { createAnthropic } = await import("@ai-sdk/anthropic");
@@ -52,11 +40,11 @@ const provider = createOpenAI({ apiKey: process.env.OPENROUTER_API_KEY, baseURL:
                 model: provider(request.model),
                 instructions: system,
                 tools,
-                stopWhen: stopAfterSteps(10),
-{% if apiStyle == "v7" and platform != "nextjs" %}
-                telemetry: { isEnabled: true, functionId: probe.id, recordInputs: true, recordOutputs: true },
-{% else %}
+                stopWhen: isStepCount(10),
+{% if platform == "nextjs" %}
                 experimental_telemetry: { isEnabled: true, functionId: probe.id, recordInputs: true, recordOutputs: true },
+{% else %}
+                telemetry: { isEnabled: true, functionId: probe.id, recordInputs: true, recordOutputs: true },
 {% endif %}
               });
               if (request.streaming) {
@@ -74,11 +62,11 @@ const provider = createOpenAI({ apiKey: process.env.OPENROUTER_API_KEY, baseURL:
                   system,
                   prompt,
                   tools,
-                  stopWhen: stopAfterSteps(10),
-{% if apiStyle == "v7" and platform != "nextjs" %}
-                  telemetry: { isEnabled: true, functionId: probe.id, recordInputs: true, recordOutputs: true },
-{% else %}
+                  stopWhen: isStepCount(10),
+{% if platform == "nextjs" %}
                   experimental_telemetry: { isEnabled: true, functionId: probe.id, recordInputs: true, recordOutputs: true },
+{% else %}
+                  telemetry: { isEnabled: true, functionId: probe.id, recordInputs: true, recordOutputs: true },
 {% endif %}
                 });
                 for await (const _chunk of response.textStream) {
@@ -90,11 +78,11 @@ const provider = createOpenAI({ apiKey: process.env.OPENROUTER_API_KEY, baseURL:
                   system,
                   prompt,
                   tools,
-                  stopWhen: stopAfterSteps(10),
-{% if apiStyle == "v7" and platform != "nextjs" %}
-                  telemetry: { isEnabled: true, functionId: probe.id, recordInputs: true, recordOutputs: true },
-{% else %}
+                  stopWhen: isStepCount(10),
+{% if platform == "nextjs" %}
                   experimental_telemetry: { isEnabled: true, functionId: probe.id, recordInputs: true, recordOutputs: true },
+{% else %}
+                  telemetry: { isEnabled: true, functionId: probe.id, recordInputs: true, recordOutputs: true },
 {% endif %}
                 });
               }
