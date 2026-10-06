@@ -64,3 +64,9 @@ jobs:
           path: test-results/assessment-report-*.json
           if-no-files-found: error
           retention-days: 1
+
+# Replay sketch only (disabled): after trusted cassettes are checked in or restored,
+# replace the assessment step with a secrets-free invocation for supported targets:
+# - name: Replay provider assessments
+#   run: npm test -- run --category llm --framework openai --framework anthropic --framework google-genai --provider-truth=replay --cassette-root cassettes
+# Refresh stale cassettes separately in a trusted recording run; do not record on forks.

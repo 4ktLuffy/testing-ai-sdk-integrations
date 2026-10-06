@@ -123,6 +123,37 @@ not checked, and values whose absence is already reported from spans alone are
 blocked rather than repeated. With the flag off, rendered programs are
 unchanged.
 
+#### Replay
+
+`--provider-truth=replay --cassette-root cassettes` runs OpenAI, Anthropic, and
+Google Gemini LLM targets against recorded responses, with dummy API keys and
+no provider forwarding. Filter to these targets; replay rejects targets without
+provider-routing hooks. Record first in a trusted environment with
+`--provider-truth=record` using the same options and model overrides. Recording
+also writes `cassettes/<platform>/<category>/<framework>/<optionsKey>/<probeId>.jsonl`;
+`--cassette-root` changes this root. Cassettes are replaced atomically only after
+a run without stopping failures, and incomplete recordings never replace them.
+The options key contains the framework
+version and sorted options, excluding Sentry version and sync/async mode.
+Python sync/async adapters pass equivalent request arguments; SDK default
+parameter differences are reported as drift.
+
+The first JSONL line contains version 1, SHA-256 fingerprints of rendered probe
+calls and the target `assessment.njk`, recording time, and sanitized upstream
+URLs. Stale or invalid cassettes cause a setup failure requiring re-recording.
+Requests match by call ID and sequence, checking method, path, stream mode,
+model, message/content counts, and tool names. Other body/query differences
+produce a non-stopping `provider_cassette_drift` runtime note. Missing or
+mismatched exchanges return HTTP 599 and make the variant incomplete.
+Recorded response bytes/chunks, status, and content type are replayed without
+timing simulation. Older text-only exchanges replay their UTF-8 response body.
+Replayed exchanges still populate `provider-exchanges.jsonl` and use the same
+provider-truth evaluator. JSON and HTML reports identify the selected mode.
+
+Cassettes retain request/response content but exclude authentication headers
+and credential query parameters. Commit or restore reviewed cassettes for fork
+PRs; the workflow contains a disabled example requiring no provider secrets.
+
 ### Aggregation and Scoring
 
 `src/assessment/aggregation.ts` deduplicates findings within variants and targets, derives completion and health, computes scores, and creates the report summary.

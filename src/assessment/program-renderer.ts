@@ -1,3 +1,4 @@
+import { fingerprint } from "../provider/cassette.js";
 import { getProbeInputs } from "../probes/inputs.js";
 import {
 	renderTemplate,
@@ -8,6 +9,7 @@ import type { AssessmentTargetConfig, ResolvedVariant } from "./matrix.js";
 
 export interface RenderedAssessmentProgram {
 	contents: string;
+	probeFingerprints: Record<string, string>;
 	templatePath: string;
 	probeCallModes: Record<string, Array<"blocking" | "streaming">>;
 }
@@ -62,6 +64,7 @@ export function renderAssessmentProgram(
 	};
 	return {
 		contents: renderTemplate(templatePath, context),
+		probeFingerprints: Object.fromEntries(probes.map((probe) => [probe.id, fingerprint(probe.input.calls)])),
 		templatePath,
 		probeCallModes,
 	};

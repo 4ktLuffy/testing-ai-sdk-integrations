@@ -10,6 +10,7 @@ import type {
 	AssessmentRunner,
 } from "./execution.js";
 import {
+	assessmentEnvironment,
 	executionFailure,
 	executionLog,
 	resolveDependencyVersion,
@@ -87,14 +88,12 @@ export class CloudflareRunner implements AssessmentRunner {
 			await rm(devVarsPath, { force: true });
 			await writeFile(
 				devVarsPath,
-				[
-					`OPENAI_API_KEY=${process.env.OPENAI_API_KEY ?? ""}`,
-					`OPENROUTER_API_KEY=${process.env.OPENROUTER_API_KEY ?? ""}`,
-					`GOOGLE_GENAI_API_KEY=${process.env.GOOGLE_GENAI_API_KEY ?? ""}`,
-					...Object.entries(context.environment ?? {}).map(
-						([name, value]) => `${name}=${value}`,
-					),
-				].join("\n"),
+				Object.entries({
+					OPENAI_API_KEY: assessmentEnvironment(context).OPENAI_API_KEY ?? "",
+					OPENROUTER_API_KEY: assessmentEnvironment(context).OPENROUTER_API_KEY ?? "",
+					GOOGLE_GENAI_API_KEY: assessmentEnvironment(context).GOOGLE_GENAI_API_KEY ?? "",
+					...(context.environment ?? {}),
+				}).map(([name, value]) => `${name}=${value}`).join("\n"),
 				{ encoding: "utf8", mode: 0o600 },
 			);
 			const configPath = path.join(context.workDir, "wrangler.assessment.json");
@@ -145,8 +144,7 @@ export class CloudflareRunner implements AssessmentRunner {
 					{
 						cwd: context.workDir,
 						env: {
-							...process.env,
-							SENTRY_DSN: context.sentryDsn,
+							...assessmentEnvironment(context),
 						},
 						stdio: ["ignore", "pipe", "pipe"],
 						detached: true,

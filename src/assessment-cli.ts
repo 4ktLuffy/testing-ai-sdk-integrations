@@ -48,9 +48,9 @@ Options:
   --sentry-python <path>       Use a local sentry-python checkout
   --sentry-javascript <path>   Use a local sentry-javascript checkout
   --quick                      Run one representative variant per target
-  --provider-truth <mode>      record: proxy provider calls through the collector
-                               and compare spans with provider-reported usage
+  --provider-truth <mode>      off|record|replay: compare spans with provider truth
                                (default: off)
+  --cassette-root <path>       Cassette directory (default: cassettes/)
   --parallel, -j <N>           Run variants in parallel (default: 10; explicit minimum: 20)
   --open                       Open the generated dashboard
   --verbose, -v               Show variant execution progress
@@ -70,7 +70,8 @@ interface CliOptions {
 	sentryPythonPath?: string;
 	sentryJavaScriptPath?: string;
 	quick: boolean;
-	providerTruth: boolean;
+	providerTruth: false | "record" | "replay";
+	cassetteRoot: string;
 	parallel: number;
 	open: boolean;
 	verbose: boolean;
@@ -86,16 +87,16 @@ function parseParallel(value: string | undefined): number {
 	return Math.max(parsed, MIN_EXPLICIT_PARALLEL);
 }
 
-function parseProviderTruth(value: string | undefined): boolean {
+function parseProviderTruth(value: string | undefined): CliOptions["providerTruth"] {
 	if (value === undefined || value === "off") return false;
-	if (value === "record") return true;
-	throw new Error("--provider-truth must be record or off.");
+	if (value === "record" || value === "replay") return value;
+	throw new Error("--provider-truth must be off, record, or replay.");
 }
 
 /**
  * Development aid for provider-truth runs against another OpenAI-compatible
  * upstream: SENTRY_ASSESSMENT_PROVIDER_MODEL replaces the request model in
- * record mode only. Intentional provider-error calls keep their invalid model.
+ * record and replay modes. Intentional provider-error calls keep their invalid model.
  */
 function providerTruthVariant(variant: ResolvedVariant): ResolvedVariant {
 	const model = process.env.SENTRY_ASSESSMENT_PROVIDER_MODEL;
@@ -190,6 +191,7 @@ function parseCommand(): CliOptions {
 			"sentry-javascript": { type: "string" },
 			quick: { type: "boolean", default: false },
 			"provider-truth": { type: "string" },
+			"cassette-root": { type: "string" },
 			parallel: { type: "string", short: "j" },
 			open: { type: "boolean", default: false },
 			verbose: { type: "boolean", short: "v", default: false },
@@ -216,6 +218,7 @@ function parseCommand(): CliOptions {
 		sentryJavaScriptPath: values["sentry-javascript"],
 		quick: values.quick,
 		providerTruth: parseProviderTruth(values["provider-truth"]),
+		cassetteRoot: values["cassette-root"] ?? "cassettes",
 		parallel: parseParallel(values.parallel),
 		open: values.open,
 		verbose: values.verbose,
@@ -383,7 +386,7 @@ async function main() {
 			for (const variant of variants) {
 				const output = await writeAssessmentProgram(target, variant, {
 					probeIds: options.probeIds,
-					providerTruth: options.providerTruth,
+					providerTruth: !!options.providerTruth,
 				});
 				console.log(output.programPath);
 				rendered++;
@@ -411,6 +414,7 @@ async function main() {
 					const assessment = await executor.execute(framework, variant, {
 						probeIds: options.probeIds,
 						providerTruth: options.providerTruth,
+						cassetteRoot: options.cassetteRoot,
 					});
 					if (options.verbose) {
 						console.log(
@@ -440,6 +444,7 @@ async function main() {
 			),
 		);
 		const report = createReport(targets, Date.now() - startedAt);
+		report.providerTruth = options.providerTruth || "off";
 		const htmlPath = await writeAssessmentHtml(report);
 		const reportPath = await writeAssessmentReport(report);
 		console.log(`Assessment report: ${reportPath}`);

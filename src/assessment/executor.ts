@@ -1,4 +1,8 @@
-import { writeFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+import { cassettePath, fingerprint, sanitizedUpstreams, writeCassette, type CassetteSpec, type ProviderTruthMode } from "../provider/cassette.js";
+import { providerUpstreamsFromEnvironment } from "../span-collector/provider-recorder.js";
+import { renderAssessmentProgram } from "./program-renderer.js";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { getProbeCatalog } from "./catalog.js";
 import { toAssessmentTargetConfig } from "./discovery.js";
@@ -107,7 +111,7 @@ export class AssessmentExecutor {
 	async execute(
 		framework: DiscoveredFramework,
 		variant: ResolvedVariant,
-		options: { probeIds?: ReadonlySet<string>; providerTruth?: boolean } = {},
+		options: { probeIds?: ReadonlySet<string>; providerTruth?: ProviderTruthMode; cassetteRoot?: string } = {},
 	): Promise<VariantAssessment> {
 		const probes = initialProbes(framework, options.probeIds);
 		const failures: RuntimeFailure[] = [];
@@ -120,9 +124,12 @@ export class AssessmentExecutor {
 
 		try {
 			const target = toAssessmentTargetConfig(framework);
+			if (options.providerTruth === "replay" && (framework.category !== "llm" || !["openai", "anthropic", "google-genai"].includes(framework.name))) {
+				throw runtimeFailure("setup", "Replay requires a target with provider-routing hooks.");
+			}
 			const generated = await writeAssessmentProgram(target, variant, {
 				probeIds: options.probeIds,
-				providerTruth: options.providerTruth,
+				providerTruth: !!options.providerTruth,
 			});
 			generatedProgramPath = generated.programPath;
 			logPath = generated.logPath;
@@ -131,6 +138,26 @@ export class AssessmentExecutor {
 			}
 			const workDir = path.dirname(generated.programPath);
 			const executionFramework = runnerFramework(framework, variant);
+			const specs: Record<string, CassetteSpec> = {};
+			if (options.providerTruth) {
+				const rendered = renderAssessmentProgram(target, variant, options.probeIds);
+				const template = await readFile(fileURLToPath(new URL(`../runner/templates/${rendered.templatePath}`, import.meta.url)), "utf8");
+				for (const [probeId, probeFingerprint] of Object.entries(rendered.probeFingerprints)) {
+					specs[probeId] = { file: cassettePath(options.cassetteRoot ?? "cassettes", variant, probeId), header: {
+						cassette: 1, probeFingerprint, templateHash: fingerprint(template), recordedAt: new Date().toISOString(),
+						upstreams: sanitizedUpstreams(providerUpstreamsFromEnvironment()),
+					} };
+				}
+			}
+			this.collector.registerRun(variant.id);
+			if (options.providerTruth === "replay") {
+				await this.collector.prepareReplay(variant.id, specs);
+				const stale = this.collector.getFailures(variant.id);
+				if (stale.length) {
+					failures.push(...stale.slice(1));
+					throw stale[0];
+				}
+			}
 
 			const executionContext = {
 				workDir,
@@ -166,7 +193,6 @@ export class AssessmentExecutor {
 				workDir,
 				framework.platform,
 			);
-			this.collector.registerRun(variant.id);
 			const execution = await runner.executeAssessmentProgram(executionContext);
 			const protocol = parseHarnessEvents(
 				`${execution.stdout}\n${execution.stderr}`,
@@ -181,6 +207,13 @@ export class AssessmentExecutor {
 				const recorded = await this.recordProviderTruth(variant.id, workDir);
 				providerCalls = recorded.calls;
 				failures.push(...recorded.failures);
+				if (options.providerTruth !== "replay" && !failures.some((failure) => failure.stopsVariant)) {
+					const exchanges = this.collector.getProviderExchanges(variant.id);
+					for (const [probeId, spec] of Object.entries(specs)) {
+						const selected = exchanges.filter((exchange) => exchange.callId?.split(":", 1)[0] === probeId);
+						if (selected.length && selected.every((exchange) => !exchange.error)) await writeCassette(spec, selected);
+					}
+				}
 			}
 			const partition = partitionSpansByProbe(spans);
 			for (const probe of probes) {

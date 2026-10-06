@@ -65,6 +65,7 @@ export interface RuntimeFailure {
 		| "process_exit"
 		| "timeout"
 		| "provider"
+		| "provider_cassette_drift"
 		| "collector"
 		| "flush"
 		| "protocol";
@@ -188,6 +189,7 @@ export interface AssessmentSummary {
 }
 
 export interface AssessmentReport {
+	providerTruth?: "off" | "record" | "replay";
 	schemaVersion: "2";
 	scoringVersion: "2" | "3";
 	generatedAt: string;

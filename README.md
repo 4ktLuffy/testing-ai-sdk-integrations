@@ -60,6 +60,23 @@ Use local Sentry SDK checkouts with `--sentry-python <path>` or `--sentry-javasc
 
 `npm run assess -- ...` remains an alias for the same runner.
 
+### Replay
+
+Run recorded provider responses without API keys or provider network calls:
+
+```bash
+npm test -- run --category llm --framework openai --provider-truth=replay --cassette-root cassettes
+```
+
+Create cassettes beforehand with `--provider-truth=record` in a trusted environment.
+Both modes use `cassettes/` by default. Keys include platform, category, framework,
+framework version, options, and probe, and are shared across Sentry versions and
+Python sync/async modes. Replay supports OpenAI, Anthropic, and Google Gemini LLM
+targets. Missing or mismatched exchanges make the variant incomplete; changed
+probe calls or templates require re-recording. Other request differences are
+reported as drift. Reports show the mode and evaluate replayed provider truth
+normally. See [Provider Truth](docs/ARCHITECTURE.md#provider-truth) for details.
+
 ## Assessment Model
 
 The report hierarchy is:

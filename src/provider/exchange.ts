@@ -15,6 +15,8 @@ export interface ProviderExchange {
 	responseHeaders: Record<string, string>;
 	requestBody?: string;
 	responseBody: string;
+	/** Original response chunks, base64 encoded for byte-exact replay. */
+	responseChunks?: string[];
 	startedAt: string;
 	finishedAt: string;
 	clientDisconnected?: boolean;

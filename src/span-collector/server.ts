@@ -1,3 +1,4 @@
+import type { CassetteSpec, ProviderTruthMode } from "../provider/cassette.js";
 /**
  * HTTP server that collects Sentry spans from assessment variants
  */
@@ -19,7 +20,7 @@ const gunzip = promisify(zlib.gunzip);
 
 export interface SpanCollectorOptions {
 	/** Record provider exchanges through a local proxy (`--provider-truth=record`). */
-	providerTruth?: boolean;
+	providerTruth?: ProviderTruthMode;
 	providerUpstreams?: Readonly<Record<string, string>>;
 	fetchUpstream?: typeof fetch;
 }
@@ -36,7 +37,7 @@ export class SpanCollector {
 	private host: string = "127.0.0.1";
 	private projectIdToRunId: Map<number, string> = new Map();
 
-	constructor(port: number = 0, options: SpanCollectorOptions = {}) {
+	constructor(port: number = 0, private readonly options: SpanCollectorOptions = {}) {
 		this.port = port; // 0 = random available port
 		this.store = new SpanStore();
 		if (options.providerTruth) {
@@ -44,6 +45,7 @@ export class SpanCollector {
 				(projectId) => this.projectIdToRunId.get(projectId),
 				options.providerUpstreams ?? providerUpstreamsFromEnvironment(),
 				options.fetchUpstream,
+				options.providerTruth,
 			);
 		}
 		this.app = this.createApp();
@@ -252,10 +254,15 @@ export class SpanCollector {
 		if (!this.recorder) return {};
 		const projectId = this.projectIdFor(runId);
 		return {
+			...(this.options.providerTruth === "replay" ? { OPENAI_API_KEY: "replay-dummy", OPENROUTER_API_KEY: "replay-dummy", ANTHROPIC_API_KEY: "replay-dummy", GOOGLE_API_KEY: "replay-dummy", GOOGLE_GENAI_API_KEY: "replay-dummy", GEMINI_API_KEY: "replay-dummy" } : {}),
 			SENTRY_ASSESSMENT_OPENROUTER_BASE: `http://${this.host}:${this.providerPort}/provider/${projectId}/openrouter`,
 			SENTRY_ASSESSMENT_GOOGLE_BASE: `http://${this.host}:${this.providerPort}/provider/${projectId}/google`,
 			SENTRY_ASSESSMENT_PROVIDER_TRUTH_URL: `http://${this.host}:${this.port}/provider/${projectId}`,
 		};
+	}
+
+	async prepareReplay(runId: string, specs: Record<string, CassetteSpec>): Promise<void> {
+		await this.recorder?.prepareReplay(runId, specs);
 	}
 
 	async settleProviderExchanges(runId: string): Promise<boolean> {
@@ -274,6 +281,6 @@ export class SpanCollector {
 	}
 
 	getFailures(runId: string): RuntimeFailure[] {
-		return [...(this.failures.get(runId) ?? [])];
+		return [...(this.failures.get(runId) ?? []), ...(this.recorder?.getFailures(runId) ?? [])];
 	}
 }

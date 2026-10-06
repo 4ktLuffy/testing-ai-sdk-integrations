@@ -1,3 +1,5 @@
+import type { RuntimeFailure } from "../assessment/types.js";
+import { readCassette, requestMatch, type CassetteSpec, type ProviderTruthMode } from "../provider/cassette.js";
 /**
  * Records provider HTTP exchanges for provider-truth evaluation.
  *
@@ -58,13 +60,14 @@ const hopByHopResponseHeaders = [
 	"transfer-encoding",
 ];
 
-async function drain(stream: ReadableStream<Uint8Array>): Promise<string> {
+async function drain(stream: ReadableStream<Uint8Array>, rawChunks: string[]): Promise<string> {
 	const chunks: Buffer[] = [];
 	const reader = stream.getReader();
 	for (;;) {
 		const { done, value } = await reader.read();
 		if (done) break;
 		chunks.push(Buffer.from(value));
+		rawChunks.push(Buffer.from(value).toString("base64"));
 	}
 	return Buffer.concat(chunks).toString("utf8");
 }
@@ -74,6 +77,9 @@ function errorMessage(error: unknown): string {
 }
 
 export class ProviderRecorder {
+	private readonly replay = new Map<string, Map<string, ProviderExchange[]>>();
+	private readonly indices = new Map<string, Map<string, number>>();
+	private readonly failures = new Map<string, RuntimeFailure[]>();
 	private readonly exchanges = new Map<string, ProviderExchange[]>();
 	private readonly sequences = new Map<string, number>();
 	private readonly pending = new Map<string, Set<Promise<void>>>();
@@ -83,13 +89,72 @@ export class ProviderRecorder {
 		private readonly resolveRun: (projectId: number) => string | undefined,
 		private readonly upstreams: Readonly<Record<string, string>>,
 		private readonly fetchUpstream: typeof fetch = fetch,
+		private readonly mode: ProviderTruthMode = "record",
 	) {}
 
 	registerRun(runId: string): void {
 		this.exchanges.set(runId, []);
+		this.failures.set(runId, []);
+		this.indices.set(runId, new Map());
+		this.replay.delete(runId);
 		this.sequences.set(runId, 0);
 		this.pending.set(runId, new Set());
 		this.openCalls.delete(runId);
+	}
+
+	getFailures(runId: string): RuntimeFailure[] { return [...(this.failures.get(runId) ?? [])]; }
+
+	async prepareReplay(runId: string, specs: Record<string, CassetteSpec>): Promise<void> {
+		const calls = new Map<string, ProviderExchange[]>();
+		this.replay.set(runId, calls);
+		for (const [probeId, spec] of Object.entries(specs)) {
+			try {
+				const cassette = await readCassette(spec);
+				for (const exchange of (cassette?.exchanges ?? []).sort((a, b) => a.sequence - b.sequence)) {
+					if (!exchange.callId) continue;
+					const list = calls.get(exchange.callId) ?? [];
+					list.push(exchange);
+					calls.set(exchange.callId, list);
+				}
+			} catch (error) {
+				this.failures.get(runId)!.push({ kind: "setup", probeId, stopsVariant: true,
+					message: `cassette is stale, re-record: ${errorMessage(error)}` });
+			}
+		}
+	}
+
+	private replayResponse(runId: string, exchange: ProviderExchange): Response {
+		const callId = exchange.callId ?? "";
+		const probeId = callId.split(":", 1)[0];
+		const indices = this.indices.get(runId)!;
+		const index = indices.get(callId) ?? 0;
+		indices.set(callId, index + 1);
+		const recorded = this.replay.get(runId)?.get(callId)?.[index];
+		const match = recorded ? requestMatch(recorded, exchange) : "mismatch";
+		if (!recorded || match === "mismatch" || this.getFailures(runId).some((failure) => failure.kind === "setup" && failure.probeId === probeId)) {
+			const message = `No matching provider cassette exchange for ${callId} at index ${index}`;
+			this.failures.get(runId)!.push({ kind: "provider", probeId, message, stopsVariant: true });
+			exchange.status = 599;
+			exchange.error = message;
+			exchange.responseHeaders = { "content-type": "application/json" };
+			exchange.responseBody = JSON.stringify({ error: message });
+		} else {
+			if (match === "drift") this.failures.get(runId)!.push({ kind: "provider_cassette_drift", probeId,
+				message: `Provider request differs from cassette for ${callId} at index ${index}`, stopsVariant: false });
+			exchange.status = recorded.status;
+			exchange.responseHeaders = recorded.responseHeaders;
+			exchange.responseBody = recorded.responseBody;
+			exchange.responseChunks = recorded.responseChunks;
+		}
+		this.store(runId, exchange);
+		const responseBody = exchange.responseChunks ? new ReadableStream<Uint8Array>({
+			start(controller) {
+				for (const chunk of exchange.responseChunks!) controller.enqueue(Buffer.from(chunk, "base64"));
+				controller.close();
+			},
+		}) : exchange.responseBody;
+		return new Response([204, 205, 304].includes(exchange.status) ? null : responseBody,
+			{ status: exchange.status, headers: exchange.responseHeaders });
 	}
 
 	/** Exchanges recorded so far, ordered by request start. */
@@ -197,6 +262,8 @@ export class ProviderRecorder {
 			finishedAt: "",
 		};
 
+		if (this.mode === "replay") return this.replayResponse(runId, exchange);
+
 		let upstream: Response;
 		try {
 			upstream = await this.fetchUpstream(target, {
@@ -227,7 +294,7 @@ export class ProviderRecorder {
 		const [clientBranch, recordBranch] = upstream.body.tee();
 		this.track(
 			runId,
-			drain(recordBranch)
+			drain(recordBranch, exchange.responseChunks = [])
 				.then((text) => {
 					exchange.responseBody = text;
 				})
