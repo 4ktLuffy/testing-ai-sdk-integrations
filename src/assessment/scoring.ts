@@ -79,6 +79,7 @@ function worseSeverity(
 
 function domainForCapability(capability: string): ScoreDomain {
 	if (capability === "spans.description") return "core";
+	if (capability.startsWith("response.provider.")) return "core";
 	if (capability.startsWith("spans.")) return "capture";
 	if (
 		capability.startsWith("model.") ||

@@ -90,6 +90,118 @@ const definitions: Record<string, FindingDefinition> = {
 		title: "Total token count is invalid",
 		description: "The total token count must equal input plus output tokens.",
 	},
+	"tokens.provider.input.malformed": {
+		id: "tokens.provider.input.malformed",
+		severity: "major",
+		title: "Input tokens differ from provider usage",
+		description:
+			"The span's input token count differs from the usage the provider reported for the same call.",
+	},
+	"tokens.provider.output.malformed": {
+		id: "tokens.provider.output.malformed",
+		severity: "major",
+		title: "Output tokens differ from provider usage",
+		description:
+			"The span's output token count differs from the usage the provider reported for the same call.",
+	},
+	"tokens.provider.total.malformed": {
+		id: "tokens.provider.total.malformed",
+		severity: "major",
+		title: "Total tokens differ from provider usage",
+		description:
+			"The span's total token count differs from the usage the provider reported for the same call.",
+	},
+	"tokens.provider.cached.missing": {
+		id: "tokens.provider.cached.missing",
+		severity: "minor",
+		title: "Cached input tokens are not recorded",
+		description:
+			"The provider reported cached input tokens for the call, but the span does not record them.",
+	},
+	"tokens.provider.cached.malformed": {
+		id: "tokens.provider.cached.malformed",
+		severity: "major",
+		title: "Cached input tokens differ from provider usage",
+		description:
+			"The span's cached input token count differs from the usage the provider reported for the same call.",
+	},
+	"tokens.provider.cache_write.missing": {
+		id: "tokens.provider.cache_write.missing",
+		severity: "minor",
+		title: "Cache-write input tokens are not recorded",
+		description:
+			"The provider reported cache-write input tokens for the call, but the span does not record them.",
+	},
+	"tokens.provider.cache_write.malformed": {
+		id: "tokens.provider.cache_write.malformed",
+		severity: "major",
+		title: "Cache-write input tokens differ from provider usage",
+		description:
+			"The span's cache-write input token count differs from the usage the provider reported for the same call.",
+	},
+	"tokens.provider.reasoning.missing": {
+		id: "tokens.provider.reasoning.missing",
+		severity: "minor",
+		title: "Reasoning tokens are not recorded",
+		description:
+			"The provider reported reasoning tokens for the call, but the span does not record them.",
+	},
+	"tokens.provider.reasoning.malformed": {
+		id: "tokens.provider.reasoning.malformed",
+		severity: "major",
+		title: "Reasoning tokens differ from provider usage",
+		description:
+			"The span's reasoning token count differs from the usage the provider reported for the same call.",
+	},
+	"model.provider.response.malformed": {
+		id: "model.provider.response.malformed",
+		severity: "major",
+		title: "Response model differs from the provider's",
+		description:
+			"The span's response model differs from the model the provider reported for the same call.",
+	},
+	"response.provider.id.missing": {
+		id: "response.provider.id.missing",
+		severity: "minor",
+		title: "Provider response ID is not recorded",
+		description:
+			"The provider returned a response ID, but the span does not record gen_ai.response.id.",
+	},
+	"response.provider.id.malformed": {
+		id: "response.provider.id.malformed",
+		severity: "major",
+		title: "Response ID differs from the provider's",
+		description:
+			"The span's gen_ai.response.id differs from the ID the provider returned for the same call.",
+	},
+	"response.provider.finish_reason.missing": {
+		id: "response.provider.finish_reason.missing",
+		severity: "minor",
+		title: "Finish reason is not recorded",
+		description:
+			"The provider returned a finish reason, but the span does not record gen_ai.response.finish_reasons.",
+	},
+	"response.provider.finish_reason.malformed": {
+		id: "response.provider.finish_reason.malformed",
+		severity: "major",
+		title: "Finish reason differs from the provider's",
+		description:
+			"The span's finish reasons do not include the finish reason the provider returned.",
+	},
+	"spans.provider_call.missing": {
+		id: "spans.provider_call.missing",
+		severity: "critical",
+		title: "Provider call has no client span",
+		description:
+			"An assessment call made more successful provider requests than it produced client spans.",
+	},
+	"spans.provider_call.malformed": {
+		id: "spans.provider_call.malformed",
+		severity: "major",
+		title: "Provider call is reported by more than one client span",
+		description:
+			"An assessment call produced more client spans than provider requests, or two spans report the same response ID, so its usage counts more than once.",
+	},
 	"operations.missing": {
 		id: "operations.missing",
 		severity: "critical",

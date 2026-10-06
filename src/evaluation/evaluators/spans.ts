@@ -16,7 +16,7 @@ export interface ClientSpanEvaluation {
 	observations: Observation[];
 }
 
-function spanKey(span: CapturedSpan): string {
+export function spanKey(span: CapturedSpan): string {
 	return `${span.trace_id}:${span.span_id}`;
 }
 
@@ -26,14 +26,14 @@ function parentKey(span: CapturedSpan): string | undefined {
 		: undefined;
 }
 
-function assessmentCallId(span: CapturedSpan): string | undefined {
+export function assessmentCallId(span: CapturedSpan): string | undefined {
 	const value = span.data?.["test.call.id"];
 	return span.op === "test.assessment.call" && typeof value === "string"
 		? value
 		: undefined;
 }
 
-function callAncestor(
+export function callAncestor(
 	span: CapturedSpan,
 	spansById: ReadonlyMap<string, CapturedSpan>,
 ): CapturedSpan | undefined {

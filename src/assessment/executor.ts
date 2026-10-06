@@ -1,3 +1,4 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { getProbeCatalog } from "./catalog.js";
 import { toAssessmentTargetConfig } from "./discovery.js";
@@ -12,6 +13,7 @@ import { parseHarnessEvents } from "./protocol.js";
 import { reconcileExecution } from "./reconciliation.js";
 import type {
 	ProbeResult,
+	ProviderCallSummary,
 	RuntimeFailure,
 	VariantAssessment,
 } from "./types.js";
@@ -26,6 +28,7 @@ import {
 	type ResolvedFramework,
 } from "../runner/framework-config.js";
 import type { SpanCollector } from "../span-collector/server.js";
+import { summarizeProviderCalls } from "../provider/truth.js";
 
 function runnerFramework(
 	framework: DiscoveredFramework,
@@ -104,7 +107,7 @@ export class AssessmentExecutor {
 	async execute(
 		framework: DiscoveredFramework,
 		variant: ResolvedVariant,
-		options: { probeIds?: ReadonlySet<string> } = {},
+		options: { probeIds?: ReadonlySet<string>; providerTruth?: boolean } = {},
 	): Promise<VariantAssessment> {
 		const probes = initialProbes(framework, options.probeIds);
 		const failures: RuntimeFailure[] = [];
@@ -113,11 +116,13 @@ export class AssessmentExecutor {
 		let spans: VariantAssessment["spans"] = [];
 		let resolvedFrameworkVersion: string | undefined;
 		let resolvedSentryVersion: string | undefined;
+		let providerCalls: ProviderCallSummary[] | undefined;
 
 		try {
 			const target = toAssessmentTargetConfig(framework);
 			const generated = await writeAssessmentProgram(target, variant, {
 				probeIds: options.probeIds,
+				providerTruth: options.providerTruth,
 			});
 			generatedProgramPath = generated.programPath;
 			logPath = generated.logPath;
@@ -135,6 +140,9 @@ export class AssessmentExecutor {
 				timeoutMs:
 					framework.executionTimeoutMs ??
 					(framework.platform === "cloudflare" ? 300_000 : 120_000),
+				environment: options.providerTruth
+					? this.collector.getProviderEnvironment(variant.id)
+					: undefined,
 			};
 			const runner = this.runnerFor(framework.platform);
 			const environmentContext = {
@@ -169,6 +177,11 @@ export class AssessmentExecutor {
 			spans = this.collector.getSpans(variant.id);
 			const collectorFailures = this.collector.getFailures(variant.id);
 			failures.push(...collectorFailures);
+			if (options.providerTruth) {
+				const recorded = await this.recordProviderTruth(variant.id, workDir);
+				providerCalls = recorded.calls;
+				failures.push(...recorded.failures);
+			}
 			const partition = partitionSpansByProbe(spans);
 			for (const probe of probes) {
 				const probeSpans = partition.byProbe.get(probe.probeId) ?? [];
@@ -198,6 +211,45 @@ export class AssessmentExecutor {
 			resolvedSentryVersion,
 			generatedProgramPath,
 			logPath,
+			providerCalls,
 		});
+	}
+
+	/**
+	 * Persist recorded provider exchanges next to the generated program and
+	 * summarize them per assessment call. Recording gaps are reported, never
+	 * dropped, but do not stop the variant: span evaluation is still valid.
+	 */
+	private async recordProviderTruth(
+		runId: string,
+		workDir: string,
+	): Promise<{ calls: ProviderCallSummary[]; failures: RuntimeFailure[] }> {
+		const failures: RuntimeFailure[] = [];
+		if (!(await this.collector.settleProviderExchanges(runId))) {
+			failures.push(
+				runtimeFailure(
+					"collector",
+					"Provider exchange recording did not finish in time.",
+					false,
+				),
+			);
+		}
+		const exchanges = this.collector.getProviderExchanges(runId);
+		await writeFile(
+			path.join(workDir, "provider-exchanges.jsonl"),
+			exchanges.map((exchange) => `${JSON.stringify(exchange)}\n`).join(""),
+			"utf8",
+		);
+		const { calls, unattributed } = summarizeProviderCalls(exchanges);
+		if (unattributed.length > 0) {
+			failures.push(
+				runtimeFailure(
+					"collector",
+					`${unattributed.length} provider exchange(s) were recorded outside an assessment call.`,
+					false,
+				),
+			);
+		}
+		return { calls, failures };
 	}
 }

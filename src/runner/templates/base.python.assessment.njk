@@ -5,6 +5,10 @@ from contextlib import contextmanager
 import json
 import os
 import sentry_sdk
+{% if providerTruth %}
+import socket
+import urllib.parse
+{% endif %}
 {% block imports %}{% endblock %}
 
 EVENT_PREFIX = "@@SENTRY_ASSESSMENT@@ "
@@ -26,6 +30,30 @@ sentry_sdk.init(
 {% block dynamic_imports %}{% endblock %}
 
 PROBES = json.loads(r'''{{ probes | tojson }}''')
+{% if providerTruth %}
+
+
+def mark_provider_call(call_id, phase):
+    # Provider-truth call markers: exchanges recorded between start and end
+    # belong to this call. A raw socket keeps the marker invisible to the SDK's
+    # HTTP instrumentation, so markers never create spans.
+    url = os.environ.get("SENTRY_ASSESSMENT_PROVIDER_TRUTH_URL")
+    if not url:
+        return
+    target = urllib.parse.urlsplit(url)
+    query = urllib.parse.urlencode({"id": call_id, "phase": phase})
+    request = (
+        f"POST {target.path}/_call?{query} HTTP/1.1\r\n"
+        f"Host: {target.netloc}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    ).encode()
+    try:
+        with socket.create_connection((target.hostname, target.port), timeout=5) as connection:
+            connection.sendall(request)
+            while connection.recv(4096):
+                pass
+    except Exception as error:
+        print(f"Provider-truth call marker failed: {error}", flush=True)
+{% endif %}
 
 
 @contextmanager
@@ -38,7 +66,15 @@ def assessment_call(probe, request):
         span.set_data("test.probe.id", probe["id"])
         span.set_data("test.call.id", call_id)
         span.set_data("test.call.mode", call_mode)
+{% if providerTruth %}
+        mark_provider_call(call_id, "start")
+        try:
+            yield
+        finally:
+            mark_provider_call(call_id, "end")
+{% else %}
         yield
+{% endif %}
 
 
 def flush_sentry(probe_id=None):

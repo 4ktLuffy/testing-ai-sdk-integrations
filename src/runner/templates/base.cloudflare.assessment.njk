@@ -20,9 +20,38 @@ async function runAssessmentCall(probe, request, callback) {
         "test.call.mode": request.assessmentCallMode,
       },
     },
+{% if providerTruth %}
+    async (span) => {
+      await markProviderCall(request.assessmentCallId, "start");
+      try {
+        return await callback(span);
+      } finally {
+        await markProviderCall(request.assessmentCallId, "end");
+      }
+    },
+{% else %}
     callback,
+{% endif %}
   );
 }
+{% if providerTruth %}
+
+// Provider-truth call markers: exchanges recorded between start and end belong
+// to this call. Tracing is suppressed so markers never create spans.
+let providerTruthUrl;
+
+async function markProviderCall(callId, phase) {
+  if (!providerTruthUrl) return;
+  const query = new URLSearchParams({ id: callId, phase });
+  try {
+    await Sentry.suppressTracing(() =>
+      fetch(`${providerTruthUrl}/_call?${query}`, { method: "POST" }).then((response) => response.text()),
+    );
+  } catch (error) {
+    console.error(`Provider-truth call marker failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+{% endif %}
 
 export default Sentry.withSentry(
   (env) => ({
@@ -36,6 +65,9 @@ export default Sentry.withSentry(
   }),
   {
     async fetch(_request, env) {
+{% if providerTruth %}
+      providerTruthUrl = env.SENTRY_ASSESSMENT_PROVIDER_TRUTH_URL;
+{% endif %}
       const eventLines = [];
       const emit = (event) => {
         const line = `${EVENT_PREFIX}${JSON.stringify(event)}`;

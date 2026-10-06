@@ -17,6 +17,7 @@ export async function writeAssessmentProgram(
 	options: {
 		runsDirectory?: string;
 		probeIds?: ReadonlySet<string>;
+		providerTruth?: boolean;
 	} = {},
 ): Promise<GeneratedAssessmentProgram> {
 	const variantDirectory = path.join(
@@ -32,6 +33,7 @@ export async function writeAssessmentProgram(
 		target,
 		variant,
 		options.probeIds,
+		{ providerTruth: options.providerTruth },
 	);
 	const extension = getFileExtension(target.platform);
 	const programPath = path.join(variantDirectory, `assessment.${extension}`);

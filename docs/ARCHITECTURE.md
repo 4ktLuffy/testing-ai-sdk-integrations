@@ -103,6 +103,25 @@ Evaluators under `src/evaluation/` convert captured spans into atomic observatio
 
 Normalizers distinguish modern, legacy, malformed, missing, and blocked capability states. `src/evaluation/findings.ts` maps actionable observations to stable, severity-ranked findings.
 
+### Provider Truth
+
+With `--provider-truth=record`, the collector also serves a recording proxy on a
+second local port (`src/span-collector/provider-recorder.ts`). Rendered programs
+read `SENTRY_ASSESSMENT_OPENROUTER_BASE` for the provider base URL and post
+untraced start and end markers around each assessment call, so every recorded
+exchange belongs to one call. Responses stream back unbuffered; the recorder
+keeps draining upstream if the client disconnects. Exchanges are written to
+`provider-exchanges.jsonl` next to the generated program and summarized as
+`providerCalls` on the variant.
+
+`src/provider/truth.ts` normalizes what the provider reported (OpenAI chat and
+Responses, blocking and streaming; stream usage is the last report, never a
+sum). `src/evaluation/evaluators/provider-truth.ts` compares it with the call's
+client spans by response ID, then start order. Unreported provider fields are
+not checked, and values whose absence is already reported from spans alone are
+blocked rather than repeated. With the flag off, rendered programs are
+unchanged.
+
 ### Aggregation and Scoring
 
 `src/assessment/aggregation.ts` deduplicates findings within variants and targets, derives completion and health, computes scores, and creates the report summary.

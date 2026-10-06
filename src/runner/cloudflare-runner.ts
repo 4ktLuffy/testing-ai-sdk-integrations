@@ -91,6 +91,9 @@ export class CloudflareRunner implements AssessmentRunner {
 					`OPENAI_API_KEY=${process.env.OPENAI_API_KEY ?? ""}`,
 					`OPENROUTER_API_KEY=${process.env.OPENROUTER_API_KEY ?? ""}`,
 					`GOOGLE_GENAI_API_KEY=${process.env.GOOGLE_GENAI_API_KEY ?? ""}`,
+					...Object.entries(context.environment ?? {}).map(
+						([name, value]) => `${name}=${value}`,
+					),
 				].join("\n"),
 				{ encoding: "utf8", mode: 0o600 },
 			);

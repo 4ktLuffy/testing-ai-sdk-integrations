@@ -6,6 +6,7 @@ import {
 	blockedModelObservations,
 	evaluateModels,
 } from "../evaluation/evaluators/models.js";
+import { evaluateProviderTruth } from "../evaluation/evaluators/provider-truth.js";
 import { evaluateClientSpans } from "../evaluation/evaluators/spans.js";
 import {
 	evaluateConventions,
@@ -23,6 +24,7 @@ import type {
 	Finding,
 	Observation,
 	ProbeResult,
+	ProviderCallSummary,
 	RuntimeFailure,
 	VariantAssessment,
 } from "./types.js";
@@ -37,6 +39,7 @@ export interface VariantEvaluationInput {
 	resolvedSentryVersion?: string;
 	generatedProgramPath?: string;
 	logPath?: string;
+	providerCalls?: ProviderCallSummary[];
 }
 
 function shouldEvaluate(probe: ProbeResult): boolean {
@@ -53,6 +56,7 @@ function observationsForProbe(
 	variant: ResolvedVariant,
 	category: AssessmentCategory,
 	spans: VariantAssessment["spans"],
+	providerCalls: readonly ProviderCallSummary[] = [],
 ): Observation[] {
 	if (!shouldEvaluate(probe)) return [];
 	const canonicalInput = getProbeInputs(category)[probe.probeId];
@@ -87,12 +91,19 @@ function observationsForProbe(
 		? evaluateProbeTelemetry(probe, variant.id, category, spans, input)
 		: [];
 	if (input?.expectError) return [...client.observations, ...telemetry];
+	// Provider truth is opt-in: it runs only when exchanges were recorded, and
+	// never for intentional provider errors.
+	const providerTruth =
+		providerCalls.length > 0
+			? evaluateProviderTruth(probe, variant.id, spans, providerCalls)
+			: [];
 	if (!client.clientSpan) {
 		return [
 			...client.observations,
 			...blockedModelObservations(probe, variant.id),
 			...blockedMessageObservations(probe, variant.id),
 			...telemetry,
+			...providerTruth,
 		];
 	}
 	const clientObservations = spans
@@ -101,7 +112,12 @@ function observationsForProbe(
 			...evaluateModels(probe, variant.id, span, variant.modelOverrides),
 			...evaluateMessages(probe, variant.id, span),
 		]);
-	return [...client.observations, ...clientObservations, ...telemetry];
+	return [
+		...client.observations,
+		...clientObservations,
+		...telemetry,
+		...providerTruth,
+	];
 }
 
 export function evaluateVariant(
@@ -115,6 +131,9 @@ export function evaluateVariant(
 				input.variant,
 				input.category,
 				partition.byProbe.get(probe.probeId) ?? [],
+				input.providerCalls?.filter(
+					(call) => call.probeId === probe.probeId,
+				),
 			),
 		),
 		...evaluateConventions(input.variant.id, input.spans),
@@ -135,6 +154,7 @@ export function evaluateVariant(
 			findings,
 			runtimeFailures: input.runtimeFailures,
 			spans: input.spans,
+			...(input.providerCalls ? { providerCalls: input.providerCalls } : {}),
 			generatedProgramPath: input.generatedProgramPath,
 			logPath: input.logPath,
 		},

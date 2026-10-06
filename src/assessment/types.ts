@@ -114,6 +114,37 @@ export interface Finding {
 	occurrences: FindingOccurrence[];
 }
 
+/** Usage as the provider reported it. Unreported fields stay undefined. */
+export interface ProviderUsage {
+	input?: number;
+	output?: number;
+	total?: number;
+	cached?: number;
+	cacheWrite?: number;
+	reasoning?: number;
+}
+
+/** One recorded provider HTTP exchange, normalized to what the provider reported. */
+export interface ProviderExchangeSummary {
+	sequence: number;
+	path: string;
+	status: number;
+	api?: "chat" | "responses";
+	streaming?: boolean;
+	usage?: ProviderUsage;
+	model?: string;
+	responseId?: string;
+	finishReason?: string;
+	terminalEvent?: string;
+}
+
+/** Provider exchanges observed between the start and end markers of one assessment call. */
+export interface ProviderCallSummary {
+	callId: string;
+	probeId: string;
+	exchanges: ProviderExchangeSummary[];
+}
+
 export interface VariantAssessment {
 	id: string;
 	identity: VariantIdentity;
@@ -128,6 +159,7 @@ export interface VariantAssessment {
 	findings: Finding[];
 	runtimeFailures: RuntimeFailure[];
 	spans: CapturedSpan[];
+	providerCalls?: ProviderCallSummary[];
 	generatedProgramPath?: string;
 	logPath?: string;
 }

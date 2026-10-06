@@ -25,6 +25,7 @@ export function renderAssessmentProgram(
 	target: AssessmentTargetConfig,
 	variant: ResolvedVariant,
 	probeIds?: ReadonlySet<string>,
+	options: { providerTruth?: boolean } = {},
 ): RenderedAssessmentProgram {
 	const inputs = getProbeInputs(target.category);
 	const probeCallModes: Record<string, Array<"blocking" | "streaming">> = {};
@@ -57,6 +58,7 @@ export function renderAssessmentProgram(
 		variantId: variant.id,
 		probes,
 		isAsync: variant.identity.executionMode === "async",
+		...(options.providerTruth ? { providerTruth: true } : {}),
 	};
 	return {
 		contents: renderTemplate(templatePath, context),

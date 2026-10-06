@@ -54,6 +54,8 @@ npm test -- --framework openai --open
 
 `--platform js` includes Node.js, Next.js, and Cloudflare Workers. Repeat framework, platform, category, or probe filters to match any selected value. `--probe` is a debugging filter and does not add a probe-level report row. Use `--quick` to run one representative variant per target for a faster overview.
 
+`--provider-truth=record` (off by default) routes the OpenAI targets' provider calls through the local collector, stores each variant's exchanges in `runs/.../provider-exchanges.jsonl` (request bodies and allow-listed headers only; credentials are never stored), and compares client spans with the usage, model, response ID, and finish reason the provider reported. Fields the provider did not report are never checked.
+
 Use local Sentry SDK checkouts with `--sentry-python <path>` or `--sentry-javascript <path>`; see [docs/LOCAL_SENTRY_SDK.md](docs/LOCAL_SENTRY_SDK.md).
 
 `npm run assess -- ...` remains an alias for the same runner.

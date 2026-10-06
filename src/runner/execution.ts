@@ -11,6 +11,8 @@ export interface AssessmentExecutionContext {
 	programPath: string;
 	logPath: string;
 	timeoutMs: number;
+	/** Extra program environment, for example provider-truth URLs. */
+	environment?: Readonly<Record<string, string>>;
 }
 
 export interface AssessmentExecutionResult {
@@ -38,7 +40,7 @@ export function resolveDependencyVersion(
 }
 
 export function assessmentEnvironment(
-	context: Pick<AssessmentExecutionContext, "sentryDsn">,
+	context: Pick<AssessmentExecutionContext, "sentryDsn" | "environment">,
 ): NodeJS.ProcessEnv {
 	return {
 		...process.env,
@@ -46,6 +48,7 @@ export function assessmentEnvironment(
 		OPENAI_API_KEY: process.env.OPENAI_API_KEY ?? "",
 		OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY ?? "",
 		GOOGLE_GENAI_API_KEY: process.env.GOOGLE_GENAI_API_KEY ?? "",
+		...(context.environment ?? {}),
 	};
 }
 

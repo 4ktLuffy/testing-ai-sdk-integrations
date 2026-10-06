@@ -6,24 +6,46 @@ import { Hono, type Context } from "hono";
 import { serve } from "@hono/node-server";
 import { parseEnvelope } from "./envelope-parser.js";
 import { SpanStore } from "./store.js";
+import {
+	ProviderRecorder,
+	providerUpstreamsFromEnvironment,
+} from "./provider-recorder.js";
 import type { CapturedSpan, RuntimeFailure } from "../assessment/types.js";
+import type { ProviderExchange } from "../provider/exchange.js";
 import * as zlib from "node:zlib";
 import { promisify } from "node:util";
 
 const gunzip = promisify(zlib.gunzip);
 
+export interface SpanCollectorOptions {
+	/** Record provider exchanges through a local proxy (`--provider-truth=record`). */
+	providerTruth?: boolean;
+	providerUpstreams?: Readonly<Record<string, string>>;
+	fetchUpstream?: typeof fetch;
+}
+
 export class SpanCollector {
 	private app: Hono;
 	private server: ReturnType<typeof serve> | null = null;
+	private providerServer: ReturnType<typeof serve> | null = null;
+	private providerPort = 0;
+	private readonly recorder: ProviderRecorder | undefined;
 	private store: SpanStore;
 	private readonly failures = new Map<string, RuntimeFailure[]>();
 	private port: number = 0;
 	private host: string = "127.0.0.1";
 	private projectIdToRunId: Map<number, string> = new Map();
 
-	constructor(port: number = 0) {
+	constructor(port: number = 0, options: SpanCollectorOptions = {}) {
 		this.port = port; // 0 = random available port
 		this.store = new SpanStore();
+		if (options.providerTruth) {
+			this.recorder = new ProviderRecorder(
+				(projectId) => this.projectIdToRunId.get(projectId),
+				options.providerUpstreams ?? providerUpstreamsFromEnvironment(),
+				options.fetchUpstream,
+			);
+		}
 		this.app = this.createApp();
 	}
 
@@ -48,6 +70,27 @@ export class SpanCollector {
 			this.handleEnvelope(context),
 		);
 
+		// Provider-truth call markers. Programs send them without tracing
+		// (Sentry.suppressTracing in JavaScript, a raw socket in Python).
+		const recorder = this.recorder;
+		if (recorder) {
+			app.post("/provider/:projectId/_call", (context) =>
+				recorder.handleCallMarker(context),
+			);
+		}
+
+		return app;
+	}
+
+	/**
+	 * Provider traffic uses its own port so SDK HTTP instrumentation never
+	 * mistakes it for Sentry ingestion traffic on the DSN host and port.
+	 */
+	private createProviderApp(recorder: ProviderRecorder): Hono {
+		const app = new Hono();
+		app.all("/provider/:projectId/:upstream/*", (context) =>
+			recorder.handleProxy(context),
+		);
 		return app;
 	}
 
@@ -123,7 +166,7 @@ export class SpanCollector {
 	 * Start the HTTP server
 	 */
 	async start(): Promise<void> {
-		return new Promise((resolve) => {
+		await new Promise<void>((resolve) => {
 			this.server = serve(
 				{
 					fetch: this.app.fetch,
@@ -132,6 +175,21 @@ export class SpanCollector {
 				},
 				(info) => {
 					this.port = info.port;
+					resolve();
+				},
+			);
+		});
+		const recorder = this.recorder;
+		if (!recorder) return;
+		await new Promise<void>((resolve) => {
+			this.providerServer = serve(
+				{
+					fetch: this.createProviderApp(recorder).fetch,
+					port: 0,
+					hostname: this.host,
+				},
+				(info) => {
+					this.providerPort = info.port;
 					resolve();
 				},
 			);
@@ -146,6 +204,10 @@ export class SpanCollector {
 			this.server.close();
 			this.server = null;
 		}
+		if (this.providerServer) {
+			this.providerServer.close();
+			this.providerServer = null;
+		}
 	}
 
 	/**
@@ -154,6 +216,7 @@ export class SpanCollector {
 	registerRun(runId: string): void {
 		this.store.registerRun(runId);
 		this.failures.set(runId, []);
+		this.recorder?.registerRun(runId);
 	}
 
 	/**
@@ -163,6 +226,10 @@ export class SpanCollector {
 	 * The runId is encoded in the project ID field (using a hash to make it numeric)
 	 */
 	getDsn(runId: string): string {
+		return `http://public@${this.host}:${this.port}/${this.projectIdFor(runId)}`;
+	}
+
+	private projectIdFor(runId: string): number {
 		// Generate a numeric project ID from runId
 		// Use a simple hash to convert runId to a number
 		let hash = 0;
@@ -174,8 +241,28 @@ export class SpanCollector {
 
 		// Store mapping of projectId -> runId for later lookup
 		this.projectIdToRunId.set(projectId, runId);
+		return projectId;
+	}
 
-		return `http://public@${this.host}:${this.port}/${projectId}`;
+	/**
+	 * Environment for an assessment program in provider-truth mode. Empty when
+	 * provider truth is off, so programs keep their default provider base URL.
+	 */
+	getProviderEnvironment(runId: string): Record<string, string> {
+		if (!this.recorder) return {};
+		const projectId = this.projectIdFor(runId);
+		return {
+			SENTRY_ASSESSMENT_OPENROUTER_BASE: `http://${this.host}:${this.providerPort}/provider/${projectId}/openrouter`,
+			SENTRY_ASSESSMENT_PROVIDER_TRUTH_URL: `http://${this.host}:${this.port}/provider/${projectId}`,
+		};
+	}
+
+	async settleProviderExchanges(runId: string): Promise<boolean> {
+		return this.recorder ? this.recorder.settle(runId) : true;
+	}
+
+	getProviderExchanges(runId: string): ProviderExchange[] {
+		return this.recorder?.getExchanges(runId) ?? [];
 	}
 
 	/**
