@@ -1,5 +1,5 @@
 /**
- * Ground truth from recorded provider responses (OpenAI-compatible APIs).
+ * Ground truth from recorded provider responses.
  *
  * Usage is read the way a correct consumer must: from the provider's own final
  * usage report. Some providers repeat the usage block on more than one stream
@@ -19,7 +19,7 @@ import type { ProviderExchange } from "./exchange.js";
 type JsonRecord = Record<string, unknown>;
 
 export interface ProviderTruth {
-	api: "chat" | "responses";
+	api: "chat" | "responses" | "messages" | "generateContent";
 	streaming: boolean;
 	usage?: ProviderUsage;
 	model?: string;
@@ -131,8 +131,11 @@ function jsonEvents(raw: string): JsonRecord[] {
 	});
 }
 
-function apiFor(path: string): ProviderTruth["api"] | undefined {
+function apiFor(upstream: string, path: string): ProviderTruth["api"] | undefined {
 	const pathname = path.split("?", 1)[0].replace(/\/+$/, "");
+	if (upstream === "google" && /:streamGenerateContent$|:generateContent$/.test(pathname)) return "generateContent";
+	if (upstream !== "openrouter") return undefined;
+	if (pathname === "/v1/messages") return "messages";
 	if (pathname.endsWith("/chat/completions")) return "chat";
 	if (pathname.endsWith("/responses")) return "responses";
 	return undefined;
@@ -209,18 +212,75 @@ function responsesStreamTruth(raw: string): ProviderTruth {
 	return truth;
 }
 
+/** Anthropic input excludes cache reads and writes; Sentry input includes both. */
+function anthropicUsage(usage: JsonRecord): ProviderUsage | undefined {
+	const input = count(usage.input_tokens);
+	const cached = count(usage.cache_read_input_tokens);
+	const cacheWrite = count(usage.cache_creation_input_tokens);
+	return compact({
+		input: input === undefined ? undefined : input + (cached ?? 0) + (cacheWrite ?? 0),
+		output: count(usage.output_tokens),
+		cached,
+		cacheWrite,
+		reasoning: count(details(usage.output_tokens_details).thinking_tokens),
+	});
+}
+
+function messagesTruth(chunks: JsonRecord[], streaming: boolean): ProviderTruth {
+	const truth: ProviderTruth = { api: "messages", streaming };
+	let usage: JsonRecord = {};
+	for (const chunk of chunks) {
+		const message = streaming ? details(chunk.message) : chunk;
+		truth.model = text(message.model) ?? truth.model;
+		truth.responseId = text(message.id) ?? truth.responseId;
+		truth.finishReason = text(message.stop_reason) ?? truth.finishReason;
+		if (!streaming || chunk.type === "message_start") {
+			usage = { ...usage, ...details(message.usage) };
+		} else if (chunk.type === "message_delta") {
+			// Deltas report cumulative totals, and may update input fields too.
+			usage = { ...usage, ...details(chunk.usage) };
+			truth.finishReason = text(details(chunk.delta).stop_reason) ?? truth.finishReason;
+		}
+	}
+	truth.usage = anthropicUsage(usage);
+	return truth;
+}
+
+function geminiTruth(chunks: JsonRecord[], streaming: boolean): ProviderTruth {
+	const truth: ProviderTruth = { api: "generateContent", streaming };
+	for (const chunk of chunks) {
+		truth.model = text(chunk.modelVersion) ?? truth.model;
+		truth.responseId = text(chunk.responseId) ?? truth.responseId;
+		const candidate = Array.isArray(chunk.candidates) ? details(chunk.candidates[0]) : {};
+		truth.finishReason = text(candidate.finishReason) ?? truth.finishReason;
+		if (!isRecord(chunk.usageMetadata)) continue;
+		const usage = chunk.usageMetadata;
+		const output = count(usage.candidatesTokenCount);
+		const reasoning = count(usage.thoughtsTokenCount);
+		truth.usage = compact({
+			input: count(usage.promptTokenCount),
+			output: output === undefined ? undefined : output + (reasoning ?? 0),
+			cached: count(usage.cachedContentTokenCount),
+			reasoning,
+		});
+	}
+	return truth;
+}
+
 /** Normalize one recorded exchange, or undefined when it carries no provider truth. */
 export function providerTruthFromExchange(
 	exchange: Pick<
 		ProviderExchange,
-		"path" | "status" | "responseHeaders" | "responseBody"
+		"upstream" | "path" | "status" | "responseHeaders" | "responseBody"
 	>,
 ): ProviderTruth | undefined {
 	if (exchange.status < 200 || exchange.status >= 300) return undefined;
-	const api = apiFor(exchange.path);
+	const api = apiFor(exchange.upstream, exchange.path);
 	if (!api) return undefined;
 	const raw = exchange.responseBody;
 	if (isEventStream(exchange.responseHeaders["content-type"], raw)) {
+		if (api === "messages") return messagesTruth(jsonEvents(raw), true);
+		if (api === "generateContent") return geminiTruth(jsonEvents(raw), true);
 		return api === "chat" ? chatStreamTruth(raw) : responsesStreamTruth(raw);
 	}
 	let body: unknown;
@@ -229,7 +289,12 @@ export function providerTruthFromExchange(
 	} catch {
 		return undefined;
 	}
+	if (api === "generateContent") {
+		const chunks = Array.isArray(body) ? body.filter(isRecord) : isRecord(body) ? [body] : [];
+		return geminiTruth(chunks, Array.isArray(body) || exchange.path.includes(":streamGenerateContent"));
+	}
 	if (!isRecord(body)) return undefined;
+	if (api === "messages") return messagesTruth([body], false);
 	return api === "chat" ? chatTruth(body) : responseObjectTruth(body, false);
 }
 

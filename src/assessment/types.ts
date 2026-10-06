@@ -129,7 +129,7 @@ export interface ProviderExchangeSummary {
 	sequence: number;
 	path: string;
 	status: number;
-	api?: "chat" | "responses";
+	api?: "chat" | "responses" | "messages" | "generateContent";
 	streaming?: boolean;
 	usage?: ProviderUsage;
 	model?: string;

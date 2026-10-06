@@ -2,7 +2,7 @@
 
 {% block dynamic_imports %}
 from google import genai
-client = genai.Client(api_key=os.environ["GOOGLE_GENAI_API_KEY"])
+client = genai.Client(api_key=os.environ["GOOGLE_GENAI_API_KEY"]{% if providerTruth %}, http_options={"base_url": os.environ.get("SENTRY_ASSESSMENT_GOOGLE_BASE") or "https://generativelanguage.googleapis.com"}{% endif %})
 {% endblock %}
 
 {% block probe %}

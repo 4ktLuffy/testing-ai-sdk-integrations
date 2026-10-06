@@ -242,3 +242,75 @@ test("groups exchanges by call and keeps unattributed exchanges apart", () => {
 	assert.equal(calls[0].exchanges[0].usage?.cached, 1024);
 	assert.equal(unattributed.length, 1);
 });
+
+const anthropicUsage = {
+	input_tokens: 40,
+	cache_read_input_tokens: 2048,
+	cache_creation_input_tokens: 512,
+	output_tokens: 200,
+};
+const anthropicMessage = {
+	id: "msg_1", model: "claude-sonnet-4", stop_reason: "end_turn", usage: anthropicUsage,
+};
+
+for (const streaming of [false, true]) {
+	test(`normalizes Anthropic cache usage (${streaming ? "stream" : "blocking"})`, () => {
+		const body = streaming ? sse([
+			{ type: "message_start", message: { ...anthropicMessage, stop_reason: null, usage: { ...anthropicUsage, output_tokens: 1 } } },
+			{ type: "content_block_delta", delta: { type: "text_delta", text: "Paris" } },
+			{ type: "message_delta", usage: { output_tokens: 50 }, delta: {} },
+			{ type: "message_delta", usage: { output_tokens: 200 }, delta: { stop_reason: "end_turn" } },
+		], true) : JSON.stringify(anthropicMessage);
+		const recorded = exchange("/v1/messages", body);
+		const truth = providerTruthFromExchange(recorded);
+		assert.deepEqual(truth, {
+			api: "messages", streaming, model: "claude-sonnet-4", responseId: "msg_1", finishReason: "end_turn",
+			usage: { input: 2600, output: 200, cached: 2048, cacheWrite: 512 },
+		});
+		assert.notEqual(truth?.usage?.input, 40);
+		assert.equal(truth?.usage?.reasoning, undefined);
+		assert.equal(providerTruthFromExchange({ ...recorded, upstream: "google" }), undefined);
+	});
+}
+
+test("Anthropic deltas replace reported input fields and expose only explicit thinking usage", () => {
+	const truth = providerTruthFromExchange(exchange("/v1/messages", sse([
+		{ type: "message_start", message: anthropicMessage },
+		{ type: "message_delta", usage: { input_tokens: 10, cache_read_input_tokens: 20, cache_creation_input_tokens: 30, output_tokens: 100, output_tokens_details: { thinking_tokens: 80 } } },
+	])));
+	assert.deepEqual(truth?.usage, { input: 60, cached: 20, cacheWrite: 30, output: 100, reasoning: 80 });
+	const missing = providerTruthFromExchange(exchange("/v1/messages", JSON.stringify({ usage: {} })));
+	assert.equal(missing?.usage, undefined);
+});
+
+const geminiResponse = {
+	modelVersion: "gemini-2.5-flash", responseId: "gemini-1",
+	candidates: [{ finishReason: "STOP" }],
+	usageMetadata: { promptTokenCount: 1000, candidatesTokenCount: 200, thoughtsTokenCount: 150, cachedContentTokenCount: 512 },
+};
+
+for (const format of ["json", "sse", "array", "stream-json"]) {
+	test(`normalizes Gemini cached and thinking usage (${format})`, () => {
+		const chunks = [
+			{ usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 1, thoughtsTokenCount: 2 } },
+			{ candidates: [{ content: { parts: [{ text: "Paris" }] } }] },
+			geminiResponse,
+		];
+		const body = format === "sse" ? sse(chunks) : JSON.stringify(format === "array" ? chunks : geminiResponse);
+		const recorded = exchange(`/v1beta/models/gemini-2.5-flash:${format === "json" ? "generateContent" : "streamGenerateContent"}`, body, { upstream: "google" });
+		const truth = providerTruthFromExchange(recorded);
+		assert.deepEqual(truth, {
+			api: "generateContent", streaming: format !== "json", model: "gemini-2.5-flash", responseId: "gemini-1", finishReason: "STOP",
+			usage: { input: 1000, output: 350, cached: 512, reasoning: 150 },
+		});
+		assert.notEqual(truth?.usage?.output, 200);
+		assert.equal(providerTruthFromExchange({ ...recorded, upstream: "openrouter" }), undefined);
+	});
+}
+
+test("Gemini's last usage report replaces earlier fields without inventing missing counts", () => {
+	const truth = providerTruthFromExchange(exchange("/v1beta/models/m:streamGenerateContent", sse([
+		geminiResponse, { usageMetadata: { candidatesTokenCount: 7 } },
+	]), { upstream: "google" }));
+	assert.deepEqual(truth?.usage, { output: 7 });
+});

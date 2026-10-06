@@ -253,6 +253,7 @@ export class SpanCollector {
 		const projectId = this.projectIdFor(runId);
 		return {
 			SENTRY_ASSESSMENT_OPENROUTER_BASE: `http://${this.host}:${this.providerPort}/provider/${projectId}/openrouter`,
+			SENTRY_ASSESSMENT_GOOGLE_BASE: `http://${this.host}:${this.providerPort}/provider/${projectId}/google`,
 			SENTRY_ASSESSMENT_PROVIDER_TRUTH_URL: `http://${this.host}:${this.port}/provider/${projectId}`,
 		};
 	}

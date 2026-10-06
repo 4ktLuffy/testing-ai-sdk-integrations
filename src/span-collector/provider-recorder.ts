@@ -15,24 +15,29 @@ import {
 } from "../provider/exchange.js";
 
 export const PROVIDER_UPSTREAM_ENV = "SENTRY_ASSESSMENT_PROVIDER_UPSTREAM";
+export const GOOGLE_UPSTREAM_ENV = "SENTRY_ASSESSMENT_GOOGLE_UPSTREAM";
 
-/** Upstream API bases by route name. Templates currently target OpenRouter only. */
+/** Upstream API bases by route name. OpenRouter supports both OpenAI and Anthropic wires. */
 export const defaultProviderUpstreams: Readonly<Record<string, string>> = {
 	openrouter: "https://openrouter.ai/api/v1",
+	google: "https://generativelanguage.googleapis.com",
 };
 
 /**
  * SENTRY_ASSESSMENT_PROVIDER_UPSTREAM replaces the OpenRouter API base for local
  * development against another OpenAI-compatible API, for example
- * https://api.groq.com/openai/v1.
+ * https://api.groq.com/openai/v1. SENTRY_ASSESSMENT_GOOGLE_UPSTREAM does the same
+ * for the Gemini API base, for example a local server replaying recorded responses.
  */
 export function providerUpstreamsFromEnvironment(
 	environment: NodeJS.ProcessEnv = process.env,
 ): Record<string, string> {
 	const override = environment[PROVIDER_UPSTREAM_ENV];
+	const googleOverride = environment[GOOGLE_UPSTREAM_ENV];
 	return {
 		...defaultProviderUpstreams,
 		...(override ? { openrouter: override } : {}),
+		...(googleOverride ? { google: googleOverride } : {}),
 	};
 }
 
@@ -161,7 +166,11 @@ export class ProviderRecorder {
 		const url = new URL(context.req.url);
 		const prefix = `/provider/${context.req.param("projectId")}/${upstreamName}`;
 		const rest = url.pathname.slice(prefix.length);
-		const target = `${base.replace(/\/+$/, "")}${rest}${url.search}`;
+		const apiBase = base.replace(/\/+$/, "");
+		const targetBase = upstreamName === "openrouter" && rest === "/v1/messages"
+			? apiBase.replace(/\/v1$/, "")
+			: apiBase;
+		const target = `${targetBase}${rest}${url.search}`;
 		const method = context.req.method;
 		const body =
 			method === "GET" || method === "HEAD"

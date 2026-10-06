@@ -2,7 +2,7 @@
 
 {% block dynamic_imports %}
 const { GoogleGenAI } = await import("@google/genai");
-const client = new GoogleGenAI({ apiKey: process.env.GOOGLE_GENAI_API_KEY });
+const client = new GoogleGenAI({ apiKey: process.env.GOOGLE_GENAI_API_KEY{% if providerTruth %}, httpOptions: { baseUrl: process.env.SENTRY_ASSESSMENT_GOOGLE_BASE || "https://generativelanguage.googleapis.com" }{% endif %} });
 {% endblock %}
 
 {% block probe %}

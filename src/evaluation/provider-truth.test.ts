@@ -328,3 +328,53 @@ test("variant evaluation never applies provider truth to expected provider error
 		false,
 	);
 });
+
+// Client attributes follow the @sentry/node 11.4.0 Anthropic and Gemini wires.
+for (const wire of ["anthropic", "gemini"] as const) {
+	test(`${wire} provider truth exposes dropped tokens and accepts corrected spans`, () => {
+		const anthropic = wire === "anthropic";
+		const model = anthropic ? "claude-sonnet-4" : "gemini-2.5-flash";
+		const id = anthropic ? "msg_1" : "gemini-1";
+		const finish = anthropic ? "end_turn" : "STOP";
+		const provider = exchange({
+			api: anthropic ? "messages" : "generateContent",
+			path: anthropic ? "/v1/messages" : "/v1beta/models/gemini-2.5-flash:generateContent",
+			model, responseId: id, finishReason: finish,
+			usage: anthropic
+				? { input: 2600, output: 200, cached: 2048, cacheWrite: 512 }
+				: { input: 1000, output: 350, cached: 512, reasoning: 150 },
+		});
+		const span = client("a");
+		span.description = `chat ${model}`;
+		span.data = {
+			"gen_ai.operation.name": "chat",
+			"gen_ai.system": anthropic ? "anthropic" : "google_genai",
+			"gen_ai.request.model": model,
+			"gen_ai.response.model": model,
+			"gen_ai.response.id": id,
+			"gen_ai.response.finish_reasons": [finish],
+			"gen_ai.usage.input_tokens": anthropic ? 40 : 1000,
+			"gen_ai.usage.output_tokens": 200,
+			...(anthropic ? {} : { "gen_ai.usage.cache_read.input_tokens": 512 }),
+		};
+		const wrong = evaluate([span], calls(provider));
+		assert.deepEqual(findingIds(wrong), anthropic ? [
+			"tokens.provider.input.malformed",
+			"tokens.provider.cached.missing",
+			"tokens.provider.cache_write.missing",
+		] : ["tokens.provider.output.malformed", "tokens.provider.reasoning.missing"]);
+		if (anthropic) assert.deepEqual(byCapability(wrong, "tokens.provider.reasoning"), []);
+		// Negative control: the same span with complete, inclusive usage is healthy.
+		Object.assign(span.data, anthropic ? {
+			"gen_ai.usage.input_tokens": 2600,
+			"gen_ai.usage.cache_read.input_tokens": 2048,
+			"gen_ai.usage.cache_creation.input_tokens": 512,
+		} : {
+			"gen_ai.usage.output_tokens": 350,
+			"gen_ai.usage.reasoning.output_tokens": 150,
+		});
+		const healthy = evaluate([span], calls(provider));
+		assert.deepEqual(findingIds(healthy), []);
+		assert.ok(healthy.every((observation) => observation.state === "healthy"));
+	});
+}

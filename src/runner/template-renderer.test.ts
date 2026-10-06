@@ -56,3 +56,22 @@ for (const [template, isAsync] of [
 		}
 	});
 }
+
+for (const platform of ["node", "nextjs", "cloudflare", "python"]) {
+	for (const framework of ["anthropic", "google-genai"]) {
+		test(`renders ${platform}/${framework} provider base only when enabled`, () => {
+			const template = `llm/${platform}/${framework}/assessment.njk`;
+			const context = { targetId: "target", variantId: "variant", probes: [], isAsync: true };
+			const marker = framework === "anthropic" ? "SENTRY_ASSESSMENT_OPENROUTER_BASE" : "SENTRY_ASSESSMENT_GOOGLE_BASE";
+			const off = renderTemplate(template, context);
+			const on = renderTemplate(template, { ...context, providerTruth: true });
+			assert.equal(off.includes(marker), false);
+			assert.ok(on.includes(marker));
+			if (framework === "google-genai") {
+				assert.ok(on.includes(platform === "python" ? 'http_options={"base_url":' : "httpOptions: { baseUrl:"));
+			} else {
+				assert.ok(on.includes('"https://openrouter.ai/api"'));
+			}
+		});
+	}
+}

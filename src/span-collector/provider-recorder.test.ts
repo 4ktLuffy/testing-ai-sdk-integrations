@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import test from "node:test";
+import { Hono } from "hono";
+import { ProviderRecorder, defaultProviderUpstreams, providerUpstreamsFromEnvironment } from "./provider-recorder.js";
 import { SpanCollector } from "./server.js";
 
 const secrets = {
@@ -219,4 +221,50 @@ test("provider truth is off by default", async () => {
 	} finally {
 		await collector.stop();
 	}
+});
+
+for (const [upstream, path, expected] of [
+	["google", "/v1beta/models/gemini-2.5-flash:generateContent", "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"],
+	["openrouter", "/v1/messages", "https://openrouter.ai/api/v1/messages"],
+	["openrouter", "/chat/completions", "https://openrouter.ai/api/v1/chat/completions"],
+] as const) {
+	test(`routes and redacts ${upstream} ${path}`, async () => {
+		const forwarded: Array<{ url: string; headers: Headers }> = [];
+		const recorder = new ProviderRecorder(() => "run", defaultProviderUpstreams, async (url, init) => {
+			forwarded.push({ url: String(url), headers: new Headers(init?.headers) });
+			return new Response('{"ok":true}', { headers: { "content-type": "application/json", "x-goog-api-key": secrets["x-goog-api-key"] } });
+		});
+		recorder.registerRun("run");
+		const app = new Hono();
+		app.all("/provider/:projectId/:upstream/*", (context) => recorder.handleProxy(context));
+		const response = await app.request(`/provider/1/${upstream}${path}?key=${secrets.query}&alt=sse`, {
+			method: "POST",
+			headers: { "x-goog-api-key": secrets["x-goog-api-key"], "content-type": "application/json" },
+			body: "{}",
+		});
+		assert.equal(response.status, 200);
+		await response.text();
+		assert.equal(await recorder.settle("run"), true);
+		// Negative control: secrets are forwarded to the provider, not removed from the request.
+		assert.equal(forwarded[0].url, `${expected}?key=${secrets.query}&alt=sse`);
+		assert.equal(forwarded[0].headers.get("x-goog-api-key"), secrets["x-goog-api-key"]);
+		const [stored] = recorder.getExchanges("run");
+		assert.equal(stored.upstream, upstream);
+		assert.equal(stored.path, `${path}?alt=sse`);
+		assert.equal("x-goog-api-key" in stored.requestHeaders, false);
+		assert.equal("x-goog-api-key" in stored.responseHeaders, false);
+		assert.equal(JSON.stringify(stored).includes(secrets.query), false);
+		assert.equal(JSON.stringify(stored).includes(secrets["x-goog-api-key"]), false);
+	});
+}
+
+test("upstream overrides replace only the named route", () => {
+	const none = providerUpstreamsFromEnvironment({});
+	assert.equal(none.google, "https://generativelanguage.googleapis.com");
+	const both = providerUpstreamsFromEnvironment({
+		SENTRY_ASSESSMENT_PROVIDER_UPSTREAM: "http://127.0.0.1:1/v1",
+		SENTRY_ASSESSMENT_GOOGLE_UPSTREAM: "http://127.0.0.1:2",
+	});
+	assert.equal(both.openrouter, "http://127.0.0.1:1/v1");
+	assert.equal(both.google, "http://127.0.0.1:2");
 });

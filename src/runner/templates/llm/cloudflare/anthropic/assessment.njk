@@ -2,7 +2,7 @@
 
 {% block dynamic_imports %}
       const { default: Anthropic } = await import("@anthropic-ai/sdk");
-      const client = Sentry.instrumentAnthropicAiClient(new Anthropic({ apiKey: env.OPENROUTER_API_KEY, baseURL: "https://openrouter.ai/api" }));
+      const client = Sentry.instrumentAnthropicAiClient(new Anthropic({ apiKey: env.OPENROUTER_API_KEY, baseURL: {% if providerTruth %}env.SENTRY_ASSESSMENT_OPENROUTER_BASE || {% endif %}"https://openrouter.ai/api" }));
 {% endblock %}
 
 {% block probe %}

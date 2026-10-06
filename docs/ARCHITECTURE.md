@@ -107,7 +107,8 @@ Normalizers distinguish modern, legacy, malformed, missing, and blocked capabili
 
 With `--provider-truth=record`, the collector also serves a recording proxy on a
 second local port (`src/span-collector/provider-recorder.ts`). Rendered programs
-read `SENTRY_ASSESSMENT_OPENROUTER_BASE` for the provider base URL and post
+read `SENTRY_ASSESSMENT_OPENROUTER_BASE` (OpenAI and Anthropic) or
+`SENTRY_ASSESSMENT_GOOGLE_BASE` (Gemini) for the provider base URL and post
 untraced start and end markers around each assessment call, so every recorded
 exchange belongs to one call. Responses stream back unbuffered; the recorder
 keeps draining upstream if the client disconnects. Exchanges are written to
@@ -115,8 +116,8 @@ keeps draining upstream if the client disconnects. Exchanges are written to
 `providerCalls` on the variant.
 
 `src/provider/truth.ts` normalizes what the provider reported (OpenAI chat and
-Responses, blocking and streaming; stream usage is the last report, never a
-sum). `src/evaluation/evaluators/provider-truth.ts` compares it with the call's
+Responses, Anthropic Messages, and Gemini generateContent, blocking and
+streaming; stream usage is the last report, never a sum). `src/evaluation/evaluators/provider-truth.ts` compares it with the call's
 client spans by response ID, then start order. Unreported provider fields are
 not checked, and values whose absence is already reported from spans alone are
 blocked rather than repeated. With the flag off, rendered programs are
