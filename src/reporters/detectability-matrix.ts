@@ -55,6 +55,8 @@ export interface MatrixRow {
 	framework: string;
 	variant: string;
 	sendDefaultPii: boolean | undefined;
+	/** Node only: false when `dataCollection.genAI` was turned off. */
+	genAIDataCollection: boolean | undefined;
 	runs: number;
 	cells: Record<MatrixColumn, MatrixCell>;
 }
@@ -143,13 +145,16 @@ export function buildDetectabilityMatrix(
 	const rows = new Map<string, MatrixRow & { controlRuns: number }>();
 	for (const variant of variants) {
 		if (!variant.detectability || variant.detectability.length === 0) continue;
-		const byPii = new Map<string, DetectabilityResult[]>();
+		const byMode = new Map<string, DetectabilityResult[]>();
 		for (const result of variant.detectability) {
 			const pii = String(result.sendDefaultPii ?? "unknown");
-			byPii.set(pii, [...(byPii.get(pii) ?? []), result]);
+			const genAI = String(result.genAIDataCollection ?? "unknown");
+			const mode = `${pii}|${genAI}`;
+			byMode.set(mode, [...(byMode.get(mode) ?? []), result]);
 		}
-		for (const [pii, results] of byPii) {
-			const key = `${variant.id}|pii=${pii}`;
+		for (const [mode, results] of byMode) {
+			const [pii = "unknown", genAI = "unknown"] = mode.split("|");
+			const key = `${variant.id}|pii=${pii}|genai=${genAI}`;
 			const { platform, framework } = targetParts(variant.id);
 			const row =
 				rows.get(key) ??
@@ -159,6 +164,7 @@ export function buildDetectabilityMatrix(
 					framework,
 					variant: variantLabel(variant),
 					sendDefaultPii: pii === "unknown" ? undefined : pii === "true",
+					genAIDataCollection: genAI === "unknown" ? undefined : genAI === "true",
 					runs: 0,
 					cells: Object.fromEntries(
 						MATRIX_COLUMNS.map((column) => [column, emptyCell()]),
@@ -235,7 +241,13 @@ function rowLabel(row: MatrixRow): string {
 			: row.sendDefaultPii
 				? ", send_default_pii on"
 				: ", send_default_pii off";
-	return `${row.platform}/${row.framework} (${row.variant}${pii})`;
+	const genAI =
+		row.genAIDataCollection === undefined
+			? ""
+			: row.genAIDataCollection
+				? ", AI data collection on"
+				: ", AI data collection off";
+	return `${row.platform}/${row.framework} (${row.variant}${pii}${genAI})`;
 }
 
 /** Markdown table, one row per variant and data-collection setting. */

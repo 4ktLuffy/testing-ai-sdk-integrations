@@ -9,6 +9,13 @@ Sentry.init({
   sendDefaultPii: {% if detectability %}process.env.SENTRY_ASSESSMENT_SEND_DEFAULT_PII !== "0"{% else %}true{% endif %},
   tracesSampleRate: 1.0,
   streamGenAiSpans: true,
+{% if detectability %}
+  // SENTRY_ASSESSMENT_GENAI_DATA_COLLECTION=0 turns off AI inputs/outputs. In
+  // @sentry/node 11 this, not sendDefaultPii, gates prompts, answers and tool I/O.
+  ...(process.env.SENTRY_ASSESSMENT_GENAI_DATA_COLLECTION === "0"
+    ? { dataCollection: { genAI: { inputs: false, outputs: false } } }
+    : {}),
+{% endif %}
 });
 
 {% block dynamic_imports %}{% endblock %}
@@ -70,6 +77,7 @@ async function markProviderCall(callId, phase{% if detectability %}, fault{% end
 // truth: which tools ran with which arguments, the answer, and how the run ended.
 const FAULT_PROBE_PREFIX = "agent.fault.";
 const SEND_DEFAULT_PII = process.env.SENTRY_ASSESSMENT_SEND_DEFAULT_PII !== "0";
+const GENAI_DATA_COLLECTION = process.env.SENTRY_ASSESSMENT_GENAI_DATA_COLLECTION !== "0";
 
 function stableJson(value) {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
@@ -86,6 +94,7 @@ function emitAgentLog(probe, request, toolLog, { answer, error, stepLimit = fals
     callId: request.assessmentCallId,
     tools: toolLog,
     sendDefaultPii: SEND_DEFAULT_PII,
+    genAIDataCollection: GENAI_DATA_COLLECTION,
     timestamp: new Date().toISOString(),
   };
   if (typeof answer === "string") event.answer = answer;

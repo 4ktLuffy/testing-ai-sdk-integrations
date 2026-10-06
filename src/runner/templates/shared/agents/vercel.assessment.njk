@@ -36,8 +36,9 @@ runFaultCall = async (probe, request) => {
     stopWhen: isStepCount(fault.maxModelCalls),
     maxRetries: fault.maxRetries ?? 2,
     ...(fault.maxOutputTokens ? { maxOutputTokens: fault.maxOutputTokens } : {}),
-    // Data collection follows sendDefaultPii; no explicit opt-in beyond it.
-    telemetry: { isEnabled: true, functionId: probe.id, ...(SEND_DEFAULT_PII ? { recordInputs: true, recordOutputs: true } : {}) },
+    // Per-call recordInputs/recordOutputs outrank dataCollection.genAI, so opt in
+    // only when both sendDefaultPii and AI data collection are on.
+    telemetry: { isEnabled: true, functionId: probe.id, ...(SEND_DEFAULT_PII && GENAI_DATA_COLLECTION ? { recordInputs: true, recordOutputs: true } : {}) },
   };
   let answer;
   try {

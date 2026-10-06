@@ -146,6 +146,9 @@ function parseAgentLog(value: Record<string, unknown>): AgentRunLog | undefined 
 	if (typeof value.sendDefaultPii === "boolean") {
 		log.sendDefaultPii = value.sendDefaultPii;
 	}
+	if (typeof value.genAIDataCollection === "boolean") {
+		log.genAIDataCollection = value.genAIDataCollection;
+	}
 	return log;
 }
 

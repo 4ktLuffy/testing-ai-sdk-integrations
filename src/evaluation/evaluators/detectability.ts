@@ -268,6 +268,7 @@ function ordered(spans: readonly CapturedSpan[]): CapturedSpan[] {
 }
 
 function piiNote(log: AgentRunLog): string {
+	if (log.genAIDataCollection === false) return " (AI data collection off)";
 	return log.sendDefaultPii === false ? " (send_default_pii off)" : "";
 }
 
@@ -722,6 +723,9 @@ export function evaluateDetectability(
 				reasons,
 				...(log.sendDefaultPii !== undefined
 					? { sendDefaultPii: log.sendDefaultPii }
+					: {}),
+				...(log.genAIDataCollection !== undefined
+					? { genAIDataCollection: log.genAIDataCollection }
 					: {}),
 			});
 			observations.push({

@@ -76,3 +76,21 @@ test("false alarms on the healthy control are reported in the control column", (
 	assert.equal(rows[0].cells.control.status, "false_alarm");
 	assert.match(rows[0].cells.control.text, /false alarm on 1\/1 healthy run/);
 });
+
+test("Node AI data-collection mode splits rows and labels them", () => {
+	const rows = buildDetectabilityMatrix([
+		variant("node/agents/vercel/framework=7", [
+			result({ genAIDataCollection: false, verdict: "undetectable", reasons: [{ id: "answer.missing", detail: "x" }] }),
+			result({ genAIDataCollection: true }),
+			result({}),
+		]),
+	]);
+	assert.equal(rows.length, 3);
+	const off = rows.find((row) => row.genAIDataCollection === false);
+	assert.equal(off?.cells.truncated_answer.text, "not detectable 0/1 (answer.missing)");
+	const markdown = renderDetectabilityMarkdown(rows);
+	assert.match(markdown, /send_default_pii on, AI data collection off\) \| 1 \|/);
+	assert.match(markdown, /send_default_pii on, AI data collection on\) \| 1 \|/);
+	// Results without the field keep the old label.
+	assert.match(markdown, /send_default_pii on\) \| 1 \|/);
+});

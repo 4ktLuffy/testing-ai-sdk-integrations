@@ -160,6 +160,11 @@ export interface AgentRunLog {
 	error?: { type: string; message: string; stepLimit?: boolean };
 	/** Whether the program sent default PII (prompts, tool I/O) to Sentry. */
 	sendDefaultPii?: boolean;
+	/**
+	 * Node only: whether `dataCollection.genAI` inputs/outputs were left on.
+	 * In @sentry/node 11 this, not sendDefaultPii, gates AI inputs and outputs.
+	 */
+	genAIDataCollection?: boolean;
 }
 
 export type DetectabilityVerdict =
@@ -186,6 +191,7 @@ export interface DetectabilityResult {
 	/** Why Sentry's telemetry was insufficient, one stable reason ID each. */
 	reasons: Array<{ id: string; detail: string }>;
 	sendDefaultPii?: boolean;
+	genAIDataCollection?: boolean;
 }
 
 /** Provider exchanges observed between the start and end markers of one assessment call. */

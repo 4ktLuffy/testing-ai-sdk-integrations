@@ -169,6 +169,30 @@ test("a tool loop without recorded arguments names the missing attribute", () =>
 	assert.equal(loop?.verdict, "undetectable");
 	assert.equal(loop?.reasons[0].id, "tool.arguments_missing");
 	assert.match(loop?.reasons[0].detail ?? "", /send_default_pii off/);
+	assert.equal(loop?.sendDefaultPii, false);
+	assert.equal("genAIDataCollection" in (loop ?? {}), false);
+});
+
+test("Node runs with AI data collection off say so and carry the mode", () => {
+	const p = `${parent}tool_loop:blocking:0`;
+	const tools = [0, 1, 2].map((index) =>
+		span("gen_ai.execute_tool", `t${index}`, "ag", { "gen_ai.tool.name": "search_docs" }),
+	);
+	const spans = [span("gen_ai.invoke_agent", "ag", p), ...tools, span("gen_ai.chat", "c", "ag", { "gen_ai.response.finish_reasons": '["stop"]' })];
+	const log = { tools: [0, 1, 2].map(() => ({ name: "search_docs", arguments: '{"query": "refund policy"}' })), answer: "Refunds within 30 days.", sendDefaultPii: true, genAIDataCollection: false };
+	const result = evaluate("agent.fault.tool_loop", spans, log, exchanges({}, {}, {}, {}));
+	const loop = result.results.find((entry) => entry.failureClass === "tool_loop");
+	assert.equal(loop?.verdict, "undetectable");
+	assert.match(loop?.reasons[0].detail ?? "", /AI data collection off/);
+	assert.equal(loop?.genAIDataCollection, false);
+	// Negative control: the same spans with arguments recorded are detectable.
+	const withArgs = spans.map((entry) =>
+		entry.op === "gen_ai.execute_tool"
+			? { ...entry, data: { ...entry.data, "gen_ai.tool.call.arguments": '{"query": "refund policy"}' } }
+			: entry,
+	);
+	const visible = evaluate("agent.fault.tool_loop", withArgs, log, exchanges({}, {}, {}, {}));
+	assert.equal(visible.results.find((entry) => entry.failureClass === "tool_loop")?.verdict, "detectable");
 });
 
 test("a retry storm needs provider http.client spans", () => {

@@ -95,3 +95,35 @@ for (const [template, extra] of [
 		assert.match(on, /SENTRY_ASSESSMENT_OPENROUTER_BASE/);
 	});
 }
+
+for (const [template, extra] of [
+	["agents/node/langgraph/assessment.njk", { provider: "openai" }],
+	["agents/node/vercel/assessment.njk", { provider: "openai", agentStyle: "function", platform: "node", baseTemplate: "base.node.assessment.njk" }],
+] as const) {
+	test(`renders the AI data-collection switch for ${template} only with detectability`, () => {
+		const context = { targetId: "target", variantId: "variant", probes: [], providerTruth: true, ...extra };
+		const off = renderTemplate(template, context);
+		const on = renderTemplate(template, { ...context, detectability: true });
+		for (const marker of ["SENTRY_ASSESSMENT_GENAI_DATA_COLLECTION", "dataCollection: { genAI: { inputs: false, outputs: false } }", "genAIDataCollection: GENAI_DATA_COLLECTION"]) {
+			assert.equal(off.includes(marker), false, `${marker} rendered when off`);
+			assert.ok(on.includes(marker), `${marker} missing when on`);
+		}
+		// The switch sits inside Sentry.init, before any instrumented import.
+		assert.ok(on.indexOf("dataCollection:") < on.indexOf("});"));
+	});
+}
+
+test("the Vercel per-call opt-in cannot override AI data collection off", () => {
+	const on = renderTemplate("agents/node/vercel/assessment.njk", {
+		targetId: "target", variantId: "variant", probes: [], providerTruth: true, detectability: true,
+		provider: "openai", agentStyle: "class", platform: "node", baseTemplate: "base.node.assessment.njk",
+	});
+	assert.match(on, /SEND_DEFAULT_PII && GENAI_DATA_COLLECTION \? \{ recordInputs: true, recordOutputs: true \}/);
+});
+
+test("Python programs do not get the Node-only data-collection switch", () => {
+	const on = renderTemplate("agents/python/langgraph/assessment.njk", {
+		targetId: "target", variantId: "variant", probes: [], providerTruth: true, detectability: true, isAsync: false, provider: "openai",
+	});
+	assert.equal(on.includes("SENTRY_ASSESSMENT_GENAI_DATA_COLLECTION"), false);
+});

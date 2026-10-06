@@ -52,3 +52,12 @@ test("parses failure-injection run logs and rejects malformed ones", () => {
 	assert.equal(result.failures.length, 1);
 	assert.equal(result.failures[0].kind, "protocol");
 });
+
+test("parses the Node AI data-collection mode and ignores non-boolean values", () => {
+	const line = (mode: string) =>
+		`${ASSESSMENT_EVENT_PREFIX}{"type":"agent_log","probeId":"agent.fault.control","callId":"c","tools":[],"answer":"ok","sendDefaultPii":true,"genAIDataCollection":${mode}}`;
+	const result = parseHarnessEvents([line("false"), line('"false"')].join("\n"));
+	assert.equal(result.agentLogs.length, 2);
+	assert.equal(result.agentLogs[0].genAIDataCollection, false);
+	assert.equal("genAIDataCollection" in result.agentLogs[1], false);
+});
