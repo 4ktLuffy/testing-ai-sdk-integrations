@@ -31,3 +31,24 @@ test("parses runtime failures emitted by the assessment harness", () => {
 	});
 	assert.equal(result.failures.length, 0);
 });
+
+test("parses failure-injection run logs and rejects malformed ones", () => {
+	const result = parseHarnessEvents(
+		[
+			`${ASSESSMENT_EVENT_PREFIX}{"type":"agent_log","probeId":"agent.fault.dead_end","callId":"agent.fault.dead_end:blocking:0","tools":[{"name":"search_docs","arguments":"{}"}],"error":{"type":"MaxTurnsExceeded","message":"Max turns (2) exceeded","stepLimit":true},"sendDefaultPii":false}`,
+			`${ASSESSMENT_EVENT_PREFIX}{"type":"agent_log","probeId":"agent.fault.control","callId":"c","tools":[{"name":"lookup_order"}]}`,
+			`${ASSESSMENT_EVENT_PREFIX}{"type":"assessment_finished"}`,
+		].join("\n"),
+	);
+	assert.deepEqual(result.agentLogs, [
+		{
+			probeId: "agent.fault.dead_end",
+			callId: "agent.fault.dead_end:blocking:0",
+			tools: [{ name: "search_docs", arguments: "{}" }],
+			error: { type: "MaxTurnsExceeded", message: "Max turns (2) exceeded", stepLimit: true },
+			sendDefaultPii: false,
+		},
+	]);
+	assert.equal(result.failures.length, 1);
+	assert.equal(result.failures[0].kind, "protocol");
+});

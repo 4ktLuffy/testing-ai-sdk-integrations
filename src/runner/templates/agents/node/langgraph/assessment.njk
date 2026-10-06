@@ -12,6 +12,46 @@ const { tool } = await import("@langchain/core/tools");
 const { z } = await import("zod");
 {% endblock %}
 
+{% block fault_call %}
+{% if provider != "anthropic" %}
+const { GraphRecursionError } = await import("@langchain/langgraph");
+// createReactAgent answers with this message instead of raising when the
+// remaining steps cannot fit another tool round.
+const REMAINING_STEPS_MESSAGE = "Sorry, need more steps to process this request.";
+
+runFaultCall = async (probe, request) => {
+  const fault = probe.input.fault;
+  const toolLog = [];
+  const faultTools = (probe.input.tools ?? []).map((definition) => tool(
+    faultToolHandler(definition, toolLog),
+    { name: definition.name, description: definition.description, schema: definition.parameters },
+  ));
+  const llm = new ChatOpenAI({
+    model: request.model,
+    apiKey: process.env.OPENROUTER_API_KEY,
+    configuration: { baseURL: {% if providerTruth %}process.env.SENTRY_ASSESSMENT_OPENROUTER_BASE || {% endif %}"https://openrouter.ai/api/v1" },
+    maxRetries: fault.maxRetries ?? 2,
+    ...(fault.maxOutputTokens ? { maxTokens: fault.maxOutputTokens } : {}),
+  });
+  const agent = createReactAgent({ llm, tools: faultTools, name: "assessment-agent" });
+  let state;
+  try {
+    // Each model call is one agent step plus one tool step.
+    state = await agent.invoke(
+      { messages: [new HumanMessage(request.messages.at(-1).content)] },
+      { recursionLimit: 2 * fault.maxModelCalls },
+    );
+  } catch (error) {
+    emitAgentLog(probe, request, toolLog, { error, stepLimit: error instanceof GraphRecursionError || error?.name === "GraphRecursionError" });
+    return;
+  }
+  const content = state.messages.at(-1)?.content;
+  const answer = typeof content === "string" ? content : JSON.stringify(content);
+  emitAgentLog(probe, request, toolLog, { answer, stepLimit: answer === REMAINING_STEPS_MESSAGE });
+};
+{% endif %}
+{% endblock %}
+
 {% block probe %}
           const tools = (probe.input.tools ?? []).map((definition) => tool(
             async () => {
@@ -27,7 +67,7 @@ const { z } = await import("zod");
 {% if provider == "anthropic" %}
             const llm = new ChatAnthropic({ modelName: request.model, anthropicApiKey: process.env.OPENROUTER_API_KEY, anthropicApiUrl: "https://openrouter.ai/api", thinking: { type: "enabled", budget_tokens: 1024 } });
 {% else %}
-            const llm = new ChatOpenAI({ modelName: request.model, apiKey: process.env.OPENROUTER_API_KEY, configuration: { baseURL: "https://openrouter.ai/api/v1" } });
+            const llm = new ChatOpenAI({ modelName: request.model, apiKey: process.env.OPENROUTER_API_KEY, configuration: { baseURL: {% if providerTruth %}process.env.SENTRY_ASSESSMENT_OPENROUTER_BASE || {% endif %}"https://openrouter.ai/api/v1" } });
 {% endif %}
             try {
               const agent = createReactAgent({ llm, tools, name: "assessment-agent" });

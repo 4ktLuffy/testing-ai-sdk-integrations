@@ -5,6 +5,12 @@
  * upstream API base and streams the response back unbuffered while keeping a
  * copy. If the client disconnects, the upstream response is still drained so
  * the recording is complete. Credentials are forwarded but never stored.
+ *
+ * Scripted faults (`--detectability` only): a call start marker may carry
+ * `fault=provider_500x3`. The next three provider requests of that call are then
+ * answered with a recorded HTTP 500 without contacting the upstream, so the
+ * client's own retries reach the real provider afterwards. Faults are refused
+ * unless the recorder was created with `allowFaults`.
  */
 import type { Context } from "hono";
 import {
@@ -69,6 +75,15 @@ async function drain(stream: ReadableStream<Uint8Array>): Promise<string> {
 	return Buffer.concat(chunks).toString("utf8");
 }
 
+/** Scripted provider faults: name -> number of HTTP 500 responses served. */
+export const providerFaults: Readonly<Record<string, number>> = {
+	provider_500x3: 3,
+};
+
+const injectedErrorBody = JSON.stringify({
+	error: { message: "upstream overloaded", type: "server_error" },
+});
+
 function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
@@ -78,11 +93,16 @@ export class ProviderRecorder {
 	private readonly sequences = new Map<string, number>();
 	private readonly pending = new Map<string, Set<Promise<void>>>();
 	private readonly openCalls = new Map<string, string>();
+	private readonly scriptedFaults = new Map<
+		string,
+		{ fault: string; remaining: number }
+	>();
 
 	constructor(
 		private readonly resolveRun: (projectId: number) => string | undefined,
 		private readonly upstreams: Readonly<Record<string, string>>,
 		private readonly fetchUpstream: typeof fetch = fetch,
+		private readonly allowFaults = false,
 	) {}
 
 	registerRun(runId: string): void {
@@ -90,6 +110,7 @@ export class ProviderRecorder {
 		this.sequences.set(runId, 0);
 		this.pending.set(runId, new Set());
 		this.openCalls.delete(runId);
+		this.scriptedFaults.delete(runId);
 	}
 
 	/** Exchanges recorded so far, ordered by request start. */
@@ -132,10 +153,28 @@ export class ProviderRecorder {
 		if (!callId || (phase !== "start" && phase !== "end")) {
 			return context.json({ error: "Invalid call marker" }, 400);
 		}
+		const fault = context.req.query("fault");
+		if (fault !== undefined) {
+			if (!this.allowFaults || phase !== "start") {
+				return context.json({ error: "Provider faults are not enabled" }, 400);
+			}
+			if (providerFaults[fault] === undefined) {
+				return context.json({ error: "Unknown provider fault" }, 400);
+			}
+		}
 		if (phase === "start") {
 			this.openCalls.set(runId, callId);
+			if (fault !== undefined) {
+				this.scriptedFaults.set(runId, {
+					fault,
+					remaining: providerFaults[fault],
+				});
+			} else {
+				this.scriptedFaults.delete(runId);
+			}
 		} else if (this.openCalls.get(runId) === callId) {
 			this.openCalls.delete(runId);
+			this.scriptedFaults.delete(runId);
 		}
 		return context.json({ status: "ok" });
 	}
@@ -196,6 +235,20 @@ export class ProviderRecorder {
 			startedAt: new Date().toISOString(),
 			finishedAt: "",
 		};
+
+		const scripted = this.scriptedFaults.get(runId);
+		if (scripted && scripted.remaining > 0) {
+			scripted.remaining -= 1;
+			exchange.status = 500;
+			exchange.injectedFault = scripted.fault;
+			exchange.responseHeaders = { "content-type": "application/json" };
+			exchange.responseBody = injectedErrorBody;
+			this.store(runId, exchange);
+			return new Response(injectedErrorBody, {
+				status: 500,
+				headers: { "content-type": "application/json" },
+			});
+		}
 
 		let upstream: Response;
 		try {

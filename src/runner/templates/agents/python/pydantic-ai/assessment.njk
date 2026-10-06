@@ -2,11 +2,62 @@
 
 {% block dynamic_imports %}
 os.environ["OPENAI_API_KEY"] = os.environ["OPENROUTER_API_KEY"]
-os.environ["OPENAI_BASE_URL"] = "https://openrouter.ai/api/v1"
+os.environ["OPENAI_BASE_URL"] = {% if providerTruth %}os.environ.get("SENTRY_ASSESSMENT_OPENROUTER_BASE") or {% endif %}"https://openrouter.ai/api/v1"
 from pydantic_ai import Agent
 {% if modelSetup == "fallback" %}
 from pydantic_ai.models.fallback import FallbackModel
 {% endif %}
+{% endblock %}
+
+{% block fault_call %}
+from openai import AsyncOpenAI
+from pydantic_ai import Tool
+from pydantic_ai.exceptions import UsageLimitExceeded
+from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.openai import OpenAIProvider
+from pydantic_ai.usage import UsageLimits
+
+
+async def run_fault_call(probe, request):
+    fault = probe["input"]["fault"]
+    tool_log = []
+
+    def fault_tool(definition):
+        handle = fault_tool_handler(definition, tool_log)
+
+        async def invoke(**arguments):
+            return handle(arguments)
+
+        return Tool.from_schema(
+            invoke,
+            name=definition["name"],
+            description=definition["description"],
+            json_schema=definition["parameters"],
+        )
+
+    client = AsyncOpenAI(
+        api_key=os.environ["OPENAI_API_KEY"],
+        base_url=os.environ["OPENAI_BASE_URL"],
+        max_retries=fault.get("maxRetries", 2),
+    )
+    agent = Agent(
+        OpenAIChatModel(request["model"], provider=OpenAIProvider(openai_client=client)),
+        instructions="Use the tools to answer. Be brief.",
+        name="assessment-agent",
+        tools=[fault_tool(definition) for definition in probe["input"].get("tools", [])],
+        model_settings={"max_tokens": fault["maxOutputTokens"]} if fault.get("maxOutputTokens") else None,
+    )
+    prompt = request["messages"][-1]["content"]
+    try:
+        result = await agent.run(prompt, usage_limits=UsageLimits(request_limit=fault["maxModelCalls"]))
+    except UsageLimitExceeded as error:
+        emit_agent_log(probe, request, tool_log, error=error, step_limit=True)
+        return
+    except Exception as error:
+        emit_agent_log(probe, request, tool_log, error=error)
+        return
+    output = result.output
+    emit_agent_log(probe, request, tool_log, answer=output if isinstance(output, str) else json.dumps(output))
 {% endblock %}
 
 {% block probe %}

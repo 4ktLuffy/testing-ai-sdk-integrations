@@ -3,7 +3,7 @@ import {
 	renderTemplate,
 	type TemplateContext,
 } from "../runner/template-renderer.js";
-import { getProbeCatalog } from "./catalog.js";
+import { detectabilityApplies, getProbeCatalog } from "./catalog.js";
 import type { AssessmentTargetConfig, ResolvedVariant } from "./matrix.js";
 
 export interface RenderedAssessmentProgram {
@@ -25,11 +25,16 @@ export function renderAssessmentProgram(
 	target: AssessmentTargetConfig,
 	variant: ResolvedVariant,
 	probeIds?: ReadonlySet<string>,
-	options: { providerTruth?: boolean } = {},
+	options: { providerTruth?: boolean; detectability?: boolean } = {},
 ): RenderedAssessmentProgram {
 	const inputs = getProbeInputs(target.category);
 	const probeCallModes: Record<string, Array<"blocking" | "streaming">> = {};
-	const probes = getProbeCatalog(target.category).flatMap((probe) => {
+	const detectability = detectabilityApplies(
+		target.platform,
+		options.detectability,
+	);
+	const probes = getProbeCatalog(target.category, { detectability }).flatMap(
+		(probe) => {
 		if (probeIds && !probeIds.has(probe.id)) return [];
 		const input = inputs[probe.id];
 		const modes = callModes(target.streamingMode);
@@ -46,7 +51,8 @@ export function renderAssessmentProgram(
 			})),
 		);
 		return [{ ...probe, input: { ...input, calls } }];
-	});
+		},
+	);
 	const templatePath = `${target.category}/${target.platform}/${target.framework}/assessment.njk`;
 	const context: TemplateContext = {
 		...(target.versionTemplateOptions?.[variant.identity.frameworkVersion] ??
@@ -59,6 +65,7 @@ export function renderAssessmentProgram(
 		probes,
 		isAsync: variant.identity.executionMode === "async",
 		...(options.providerTruth ? { providerTruth: true } : {}),
+		...(detectability ? { detectability: true } : {}),
 	};
 	return {
 		contents: renderTemplate(templatePath, context),

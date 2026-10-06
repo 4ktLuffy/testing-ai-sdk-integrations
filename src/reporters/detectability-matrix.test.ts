@@ -1,0 +1,78 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import type { DetectabilityResult, VariantAssessment } from "../assessment/types.js";
+import {
+	buildDetectabilityMatrix,
+	renderDetectabilityHtml,
+	renderDetectabilityMarkdown,
+} from "./detectability-matrix.js";
+
+function result(partial: Partial<DetectabilityResult>): DetectabilityResult {
+	return {
+		probeId: "agent.fault.truncated_answer",
+		callId: "agent.fault.truncated_answer:blocking:0",
+		failureClass: "truncated_answer",
+		injected: true,
+		label: "truncated_answer",
+		verdict: "detectable",
+		detections: [],
+		reasons: [],
+		sendDefaultPii: true,
+		...partial,
+	};
+}
+
+function variant(id: string, detectability: DetectabilityResult[]): VariantAssessment {
+	return {
+		id,
+		identity: { frameworkVersion: "1", sentryVersion: "latest", executionMode: "async", options: {} },
+		completion: "complete",
+		health: "healthy",
+		rating: "all_good",
+		score: 100,
+		probes: [],
+		observations: [],
+		findings: [],
+		runtimeFailures: [],
+		spans: [],
+		detectability,
+	} as unknown as VariantAssessment;
+}
+
+test("matrix cells count runs and keep reasons; repeated executions merge", () => {
+	const missing = result({
+		verdict: "undetectable",
+		reasons: [{ id: "finish_reason.missing", detail: "no finish reason" }],
+	});
+	const rows = buildDetectabilityMatrix([
+		variant("python/agents/x/framework=1", [
+			missing,
+			result({ probeId: "agent.fault.control", callId: "agent.fault.control:blocking:0", failureClass: "control", verdict: "not_applicable", label: "healthy" }),
+			result({ probeId: "agent.fault.silent_tool_error", callId: "agent.fault.silent_tool_error:blocking:0", failureClass: "silent_tool_error", verdict: "not_triggered", label: "acknowledged" }),
+		]),
+		variant("python/agents/x/framework=1", [missing]),
+		variant("python/agents/x/framework=1", [result({ sendDefaultPii: false })]),
+	]);
+	assert.equal(rows.length, 2);
+	const [off, on] = rows;
+	assert.equal(off.sendDefaultPii, false);
+	assert.equal(off.cells.truncated_answer.text, "detectable 1/1");
+	assert.equal(on.runs, 4);
+	assert.equal(on.cells.truncated_answer.text, "not detectable 0/2 (finish_reason.missing x2)");
+	assert.equal(on.cells.silent_tool_error.text, "not triggered (acknowledged); data present");
+	assert.equal(on.cells.control.text, "quiet 1/1");
+	assert.equal(on.cells.tool_loop.text, "n/a");
+	assert.match(renderDetectabilityMarkdown(rows), /\| python\/x \(async, send_default_pii on\) \| 4 \|/);
+	assert.match(renderDetectabilityHtml(rows), /failure detectability/);
+	assert.equal(renderDetectabilityHtml([]), "");
+});
+
+test("false alarms on the healthy control are reported in the control column", () => {
+	const rows = buildDetectabilityMatrix([
+		variant("node/agents/y/framework=1", [
+			result({ probeId: "agent.fault.control", callId: "agent.fault.control:blocking:0", failureClass: "dead_end", injected: false, verdict: "false_alarm", label: "healthy", reasons: [{ id: "false_alarm.dead_end", detail: "x" }] }),
+		]),
+	]);
+	assert.equal(rows[0].cells.control.status, "false_alarm");
+	assert.match(rows[0].cells.control.text, /false alarm on 1\/1 healthy run/);
+});

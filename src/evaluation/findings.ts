@@ -407,10 +407,43 @@ const definitions: Record<string, FindingDefinition> = {
 	},
 };
 
+const failureClassTitles: Record<string, string> = {
+	tool_loop: "tool loop",
+	retry_storm: "retry storm",
+	silent_tool_error: "silent tool error",
+	dead_end: "dead end",
+	truncated_answer: "truncated answer",
+	empty_answer: "empty answer",
+};
+
+for (const [failureClass, title] of Object.entries(failureClassTitles)) {
+	definitions[`detect.${failureClass}.undetectable`] = {
+		id: `detect.${failureClass}.undetectable`,
+		severity: "major",
+		title: `A ${title} is not detectable from telemetry`,
+		description: `A ${title} happened (labelled from the program's own log and recorded provider exchanges), but the captured spans lack the data a detector needs to see it.`,
+		remediation:
+			"See the occurrence evidence for the missing span or attribute.",
+	};
+	definitions[`detect.${failureClass}.false_alarm`] = {
+		id: `detect.${failureClass}.false_alarm`,
+		severity: "minor",
+		title: `The ${title} detector fired on a run without that failure`,
+		description: `The telemetry made the ${title} detector fire although the program's log shows the failure did not happen.`,
+	};
+}
+
 function definitionFor(
 	observation: Observation,
 ): FindingDefinition | undefined {
 	if (observation.state === "blocked" || observation.state === "healthy") {
+		return undefined;
+	}
+	if (observation.capability.startsWith("detect.")) {
+		if (observation.state === "missing")
+			return definitions[`${observation.capability}.undetectable`];
+		if (observation.state === "malformed")
+			return definitions[`${observation.capability}.false_alarm`];
 		return undefined;
 	}
 	if (

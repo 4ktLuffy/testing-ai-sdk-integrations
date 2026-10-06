@@ -1,6 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { getProbeCatalog } from "./catalog.js";
+import { detectabilityApplies, getProbeCatalog } from "./catalog.js";
 import { toAssessmentTargetConfig } from "./discovery.js";
 import {
 	resolveInstalledPackageVersion,
@@ -12,6 +12,7 @@ import { writeAssessmentProgram } from "./program-files.js";
 import { parseHarnessEvents } from "./protocol.js";
 import { reconcileExecution } from "./reconciliation.js";
 import type {
+	AgentRunLog,
 	ProbeResult,
 	ProviderCallSummary,
 	RuntimeFailure,
@@ -50,8 +51,11 @@ function runnerFramework(
 function initialProbes(
 	framework: DiscoveredFramework,
 	probeIds?: ReadonlySet<string>,
+	detectability?: boolean,
 ): ProbeResult[] {
-	return getProbeCatalog(framework.category as "llm" | "agents").flatMap(
+	return getProbeCatalog(framework.category as "llm" | "agents", {
+		detectability: detectabilityApplies(framework.platform, detectability),
+	}).flatMap(
 		(probe) => {
 			if (probeIds && !probeIds.has(probe.id)) return [];
 			return [
@@ -107,9 +111,17 @@ export class AssessmentExecutor {
 	async execute(
 		framework: DiscoveredFramework,
 		variant: ResolvedVariant,
-		options: { probeIds?: ReadonlySet<string>; providerTruth?: boolean } = {},
+		options: {
+			probeIds?: ReadonlySet<string>;
+			providerTruth?: boolean;
+			detectability?: boolean;
+		} = {},
 	): Promise<VariantAssessment> {
-		const probes = initialProbes(framework, options.probeIds);
+		const probes = initialProbes(
+			framework,
+			options.probeIds,
+			options.detectability,
+		);
 		const failures: RuntimeFailure[] = [];
 		let generatedProgramPath: string | undefined;
 		let logPath: string | undefined;
@@ -117,12 +129,14 @@ export class AssessmentExecutor {
 		let resolvedFrameworkVersion: string | undefined;
 		let resolvedSentryVersion: string | undefined;
 		let providerCalls: ProviderCallSummary[] | undefined;
+		let agentLogs: AgentRunLog[] | undefined;
 
 		try {
 			const target = toAssessmentTargetConfig(framework);
 			const generated = await writeAssessmentProgram(target, variant, {
 				probeIds: options.probeIds,
 				providerTruth: options.providerTruth,
+				detectability: options.detectability,
 			});
 			generatedProgramPath = generated.programPath;
 			logPath = generated.logPath;
@@ -172,6 +186,7 @@ export class AssessmentExecutor {
 				`${execution.stdout}\n${execution.stderr}`,
 			);
 			failures.push(...reconcileExecution(probes, execution, protocol));
+			if (options.detectability) agentLogs = protocol.agentLogs;
 
 			await new Promise((resolve) => setTimeout(resolve, 250));
 			spans = this.collector.getSpans(variant.id);
@@ -212,6 +227,7 @@ export class AssessmentExecutor {
 			generatedProgramPath,
 			logPath,
 			providerCalls,
+			agentLogs,
 		});
 	}
 

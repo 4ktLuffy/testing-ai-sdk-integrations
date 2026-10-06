@@ -63,8 +63,67 @@ const agentProbes: readonly ProbeDefinition[] = [
 	},
 ];
 
+/**
+ * Failure-injection probes for agent frameworks. Opt-in (`--detectability`):
+ * they run after the standard catalog and never stop the variant, because an
+ * injected failure is the expected outcome.
+ */
+const agentFaultProbes: readonly ProbeDefinition[] = [
+	{
+		id: "agent.fault.control",
+		description: "A healthy tool run; no detector may fire.",
+		stopsVariantOnFailure: false,
+	},
+	{
+		id: "agent.fault.tool_loop",
+		description: "A tool that always asks to be called again with the same arguments.",
+		stopsVariantOnFailure: false,
+	},
+	{
+		id: "agent.fault.retry_storm",
+		description: "The provider returns HTTP 500 three times before answering.",
+		stopsVariantOnFailure: false,
+	},
+	{
+		id: "agent.fault.silent_tool_error",
+		description: "A tool that returns an error payload instead of raising.",
+		stopsVariantOnFailure: false,
+	},
+	{
+		id: "agent.fault.dead_end",
+		description: "The step limit is reached before a final answer.",
+		stopsVariantOnFailure: false,
+	},
+	{
+		id: "agent.fault.truncated_answer",
+		description: "A tiny output token limit cuts the final answer off.",
+		stopsVariantOnFailure: false,
+	},
+];
+
+export const FAULT_PROBE_PREFIX = "agent.fault.";
+
+/**
+ * Failure injection is implemented in the Node.js and Python harnesses only;
+ * Next.js and Cloudflare Workers targets keep the standard catalog.
+ */
+export function detectabilityApplies(
+	platform: string,
+	detectability: boolean | undefined,
+): boolean {
+	return Boolean(detectability) && (platform === "node" || platform === "python");
+}
+
+export function isFaultProbe(probeId: string): boolean {
+	return probeId.startsWith(FAULT_PROBE_PREFIX);
+}
+
 export function getProbeCatalog(
 	category: AssessmentCategory,
+	options: { detectability?: boolean } = {},
 ): readonly ProbeDefinition[] {
-	return category === "llm" ? llmProbes : agentProbes;
+	if (category === "llm") return llmProbes;
+	return options.detectability
+		? [...agentProbes, ...agentFaultProbes]
+		: agentProbes;
 }

@@ -77,6 +77,14 @@ function worseSeverity(
 	return !left || severityRank[right] > severityRank[left] ? right : left;
 }
 
+/**
+ * Detectability (`--detectability`) is reported, not scored: enabling it adds
+ * a matrix and findings but never changes a variant's score.
+ */
+function isDetectability(capability: string): boolean {
+	return capability.startsWith("detect.");
+}
+
 function domainForCapability(capability: string): ScoreDomain {
 	if (capability === "spans.description") return "core";
 	if (capability.startsWith("response.provider.")) return "core";
@@ -149,9 +157,11 @@ function activeDomains(
 	}
 
 	for (const observation of assessment.observations) {
+		if (isDetectability(observation.capability)) continue;
 		domains.add(domainForCapability(observation.capability));
 	}
 	for (const finding of assessment.findings) {
+		if (isDetectability(finding.capability)) continue;
 		domains.add(domainForCapability(finding.capability));
 	}
 	return domains;
@@ -174,6 +184,7 @@ function severitiesByDomain(
 	const linkedObservations = new Set<string>();
 
 	for (const finding of assessment.findings) {
+		if (isDetectability(finding.capability)) continue;
 		const domain = domainForCapability(finding.capability);
 		result.set(domain, worseSeverity(result.get(domain), finding.severity));
 		for (const occurrence of finding.occurrences) {
@@ -187,6 +198,7 @@ function severitiesByDomain(
 	for (const observation of assessment.observations) {
 		const key = `${observation.probeId}\u0000${observation.observationId}`;
 		if (linkedObservations.has(key)) continue;
+		if (isDetectability(observation.capability)) continue;
 		const severity = unlinkedObservationSeverity(observation);
 		if (!severity) continue;
 		const domain = domainForCapability(observation.capability);

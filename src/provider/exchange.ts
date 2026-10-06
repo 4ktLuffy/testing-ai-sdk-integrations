@@ -19,6 +19,8 @@ export interface ProviderExchange {
 	finishedAt: string;
 	clientDisconnected?: boolean;
 	error?: string;
+	/** The recorder served this scripted fault instead of contacting the upstream. */
+	injectedFault?: string;
 }
 
 const requestHeaderAllowList = new Set([

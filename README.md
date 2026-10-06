@@ -56,6 +56,8 @@ npm test -- --framework openai --open
 
 `--provider-truth=record` (off by default) routes the OpenAI, Anthropic, and Google Gemini targets' provider calls through the local collector, stores each variant's exchanges in `runs/.../provider-exchanges.jsonl` (request bodies and allow-listed headers only; credentials are never stored), and compares client spans with the usage, model, response ID, and finish reason the provider reported. Fields the provider did not report are never checked.
 
+`--detectability` (off by default; requires `--provider-truth=record`) appends failure-injection probes (`agent.fault.*`) to the agent catalog for Node.js and Python targets: a healthy control, a tool loop, a retry storm (the recorder answers three requests with HTTP 500), a silent tool error, a dead end, and a truncated answer. Each run is labelled from the program's own log and the recorded provider exchanges, a port of SpanProof's detectors runs over the captured spans, and the report gains a matrix of which failures the telemetry made detectable and, if not, which data was missing. `SENTRY_ASSESSMENT_SEND_DEFAULT_PII=0` runs the same probes with data collection off. Detectability is reported, not scored.
+
 Use local Sentry SDK checkouts with `--sentry-python <path>` or `--sentry-javascript <path>`; see [docs/LOCAL_SENTRY_SDK.md](docs/LOCAL_SENTRY_SDK.md).
 
 `npm run assess -- ...` remains an alias for the same runner.

@@ -25,10 +25,40 @@ export interface AgentToolInput {
 	arguments: Record<string, unknown>;
 	result?: unknown;
 	error?: string;
+	/** The fixed result is an error payload returned as a successful value. */
+	errorPayload?: boolean;
 }
 
 export interface AgentProbeInput extends LlmProbeInput {
 	tools?: AgentToolInput[];
+	/** Present only on opt-in failure-injection probes (`--detectability`). */
+	fault?: AgentFaultInput;
+}
+
+/** Failure classes that the detectability layer injects and evaluates. */
+export type FailureClass =
+	| "tool_loop"
+	| "retry_storm"
+	| "silent_tool_error"
+	| "dead_end"
+	| "truncated_answer";
+
+/**
+ * What a failure-injection probe changes. Adapters apply these settings and
+ * nothing else: tools return their fixed `result`, and the limits below map to
+ * the framework's own step, token, and retry settings.
+ */
+export interface AgentFaultInput {
+	/** The class this probe injects; absent for the healthy control. */
+	failureClass?: FailureClass;
+	/** Model requests allowed in one agent run (turn/step/request limit). */
+	maxModelCalls: number;
+	/** Output token limit for every model request in the run. */
+	maxOutputTokens?: number;
+	/** Client retry budget, so a scripted provider fault can be outlasted. */
+	maxRetries?: number;
+	/** Scripted fault served by the provider-truth recorder for this call. */
+	providerFault?: "provider_500x3";
 }
 
 const assistant = "You are a helpful assistant. Respond briefly.";
@@ -283,9 +313,126 @@ const agentProbeInputs: Record<string, AgentProbeInput> = {
 	},
 };
 
-/** Probe inputs are category-owned data, not a matrix axis. */
+const lookupOrder: Omit<AgentToolInput, "result"> = {
+	name: "lookup_order",
+	description: "Look up an order's status by its id.",
+	parameters: {
+		type: "object",
+		properties: { order_id: { type: "string" } },
+		required: ["order_id"],
+	},
+	arguments: { order_id: "A-1042" },
+};
+
+const searchDocs: Omit<AgentToolInput, "result"> = {
+	name: "search_docs",
+	description: "Search the internal help-center documents.",
+	parameters: {
+		type: "object",
+		properties: { query: { type: "string" } },
+		required: ["query"],
+	},
+	arguments: { query: "refund policy" },
+};
+
+const orderTask =
+	"Look up order A-1042 with the lookup_order tool and tell me its status in one sentence.";
+const refundTask =
+	"Find the refund policy using the search_docs tool and summarize it in one sentence.";
+
+/**
+ * Failure-injection probes (opt-in). Faults live in the tools, the limits, and
+ * the provider-truth recorder, never in the model: the model's reaction is
+ * real, so each run is labelled by what the program observed, not by intent.
+ * Tool results are returned as successful values (an error payload is not raised).
+ */
+const faultProbeInputs: Record<string, AgentProbeInput> = {
+	"agent.fault.control": {
+		calls: [{ model: "gpt-4o-mini", messages: [{ role: "user", content: orderTask }] }],
+		tools: [
+			{ ...lookupOrder, result: "Order A-1042: shipped on Oct 3, arriving Oct 7." },
+		],
+		fault: { maxModelCalls: 4 },
+	},
+	"agent.fault.tool_loop": {
+		calls: [{ model: "gpt-4o-mini", messages: [{ role: "user", content: refundTask }] }],
+		tools: [
+			{
+				...searchDocs,
+				result:
+					"No results yet. Please call this tool again with exactly the same arguments.",
+			},
+		],
+		fault: { failureClass: "tool_loop", maxModelCalls: 5 },
+	},
+	"agent.fault.retry_storm": {
+		calls: [
+			{
+				model: "gpt-4o-mini",
+				messages: [{ role: "user", content: capitalQuestion }],
+			},
+		],
+		fault: {
+			failureClass: "retry_storm",
+			maxModelCalls: 2,
+			maxRetries: 4,
+			providerFault: "provider_500x3",
+		},
+	},
+	"agent.fault.silent_tool_error": {
+		calls: [{ model: "gpt-4o-mini", messages: [{ role: "user", content: orderTask }] }],
+		tools: [
+			{
+				...lookupOrder,
+				result: JSON.stringify({
+					ok: false,
+					error: "upstream 503: service unavailable",
+				}),
+				errorPayload: true,
+			},
+		],
+		fault: { failureClass: "silent_tool_error", maxModelCalls: 4 },
+	},
+	"agent.fault.dead_end": {
+		calls: [{ model: "gpt-4o-mini", messages: [{ role: "user", content: refundTask }] }],
+		tools: [
+			{
+				...searchDocs,
+				result:
+					"Partial results only. Call this tool again with the same query to get the rest.",
+			},
+		],
+		fault: { failureClass: "dead_end", maxModelCalls: 2 },
+	},
+	"agent.fault.truncated_answer": {
+		calls: [
+			{
+				model: "gpt-4o-mini",
+				messages: [
+					{
+						role: "user",
+						content:
+							"Explain in three detailed paragraphs how photosynthesis works.",
+					},
+				],
+			},
+		],
+		fault: {
+			failureClass: "truncated_answer",
+			maxModelCalls: 2,
+			maxOutputTokens: 48,
+		},
+	},
+};
+
+/**
+ * Probe inputs are category-owned data, not a matrix axis. Failure-injection
+ * inputs are always available for lookup; the catalog decides whether they run.
+ */
 export function getProbeInputs(
 	category: AssessmentCategory,
 ): Record<string, LlmProbeInput | AgentProbeInput> {
-	return category === "llm" ? llmProbeInputs : agentProbeInputs;
+	return category === "llm"
+		? llmProbeInputs
+		: { ...agentProbeInputs, ...faultProbeInputs };
 }

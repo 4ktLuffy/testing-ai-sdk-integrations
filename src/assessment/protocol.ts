@@ -1,4 +1,4 @@
-import type { ProbeStatus, RuntimeFailure } from "./types.js";
+import type { AgentRunLog, ProbeStatus, RuntimeFailure } from "./types.js";
 
 export const ASSESSMENT_EVENT_PREFIX = "@@SENTRY_ASSESSMENT@@ ";
 
@@ -13,12 +13,15 @@ interface ProbeLifecycleEvent {
 type HarnessEvent =
 	| ProbeLifecycleEvent
 	| { type: "assessment_finished"; timestamp?: string }
-	| { type: "runtime_failure"; failure: RuntimeFailure; timestamp?: string };
+	| { type: "runtime_failure"; failure: RuntimeFailure; timestamp?: string }
+	| { type: "agent_log"; log: AgentRunLog; timestamp?: string };
 
 export interface ParsedHarnessEvents {
 	events: HarnessEvent[];
 	failures: RuntimeFailure[];
 	finished: boolean;
+	/** Failure-injection run logs (only emitted with `--detectability`). */
+	agentLogs: AgentRunLog[];
 }
 
 const runtimeFailureKinds = new Set<RuntimeFailure["kind"]>([
@@ -107,6 +110,45 @@ function parseProbeEvent(
 	};
 }
 
+function parseAgentLog(value: Record<string, unknown>): AgentRunLog | undefined {
+	if (typeof value.probeId !== "string" || typeof value.callId !== "string") {
+		return undefined;
+	}
+	if (!Array.isArray(value.tools)) return undefined;
+	const tools: AgentRunLog["tools"] = [];
+	for (const entry of value.tools) {
+		if (
+			!isObject(entry) ||
+			typeof entry.name !== "string" ||
+			typeof entry.arguments !== "string"
+		) {
+			return undefined;
+		}
+		tools.push({ name: entry.name, arguments: entry.arguments });
+	}
+	const log: AgentRunLog = {
+		probeId: value.probeId,
+		callId: value.callId,
+		tools,
+	};
+	if (typeof value.answer === "string") log.answer = value.answer;
+	if (
+		isObject(value.error) &&
+		typeof value.error.type === "string" &&
+		typeof value.error.message === "string"
+	) {
+		log.error = {
+			type: value.error.type,
+			message: value.error.message,
+			...(value.error.stepLimit === true ? { stepLimit: true } : {}),
+		};
+	}
+	if (typeof value.sendDefaultPii === "boolean") {
+		log.sendDefaultPii = value.sendDefaultPii;
+	}
+	return log;
+}
+
 function parseEvent(value: unknown): HarnessEvent | undefined {
 	if (!isObject(value) || typeof value.type !== "string") return undefined;
 	const timestamp =
@@ -117,6 +159,10 @@ function parseEvent(value: unknown): HarnessEvent | undefined {
 	if (value.type === "runtime_failure") {
 		const failure = parseFailure(value.failure);
 		return failure ? { type: value.type, failure, timestamp } : undefined;
+	}
+	if (value.type === "agent_log") {
+		const log = parseAgentLog(value);
+		return log ? { type: value.type, log, timestamp } : undefined;
 	}
 	return parseProbeEvent(value, timestamp);
 }
@@ -154,6 +200,9 @@ export function parseHarnessEvents(output: string): ParsedHarnessEvents {
 	}
 
 	const finished = events.some((event) => event.type === "assessment_finished");
+	const agentLogs = events.flatMap((event) =>
+		event.type === "agent_log" ? [event.log] : [],
+	);
 	if (!finished) {
 		failures.push(
 			protocolFailure(
@@ -161,5 +210,5 @@ export function parseHarnessEvents(output: string): ParsedHarnessEvents {
 			),
 		);
 	}
-	return { events, failures, finished };
+	return { events, failures, finished, agentLogs };
 }

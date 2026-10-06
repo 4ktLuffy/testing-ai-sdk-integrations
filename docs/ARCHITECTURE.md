@@ -123,6 +123,29 @@ not checked, and values whose absence is already reported from spans alone are
 blocked rather than repeated. With the flag off, rendered programs are
 unchanged.
 
+### Failure Detectability
+
+With `--detectability` (requires provider-truth recording), Node.js and Python
+agent targets also run `agent.fault.*` probes. Faults live in tools, limits, and
+the recorder, never in the model: tools return a fixed result (an endlessly
+"call again" answer, or an error payload returned as a value), a step or output
+token limit is applied, or the recorder answers the next three provider requests
+of a call with HTTP 500 without contacting the upstream. Adapters implement one
+`fault_call` block that applies exactly these settings; the base harness
+dispatches fault probes to it and emits an `agent_log` event per call (tools run,
+arguments, answer, step-limit or other error).
+
+`src/evaluation/evaluators/detectability.ts` labels each run from that log and
+the recorded exchanges only (a real model may not fail as intended, so labels
+follow what happened), runs the detectors in `src/evaluation/detectors.ts` (a
+port of SpanProof's `detectors.py`) over the call's spans, and reports each
+observed class as `detect.<class>` detectable or undetectable with stable reason
+IDs (for example `finish_reason.missing`, `tool.arguments_missing`,
+`http.span_missing`). Detections on classes the run did not exhibit are false
+alarms. `src/reporters/detectability-matrix.ts` renders the matrix in the HTML
+report and the CLI. Detectability findings are excluded from scoring. With the
+flag off, rendered programs are unchanged.
+
 ### Aggregation and Scoring
 
 `src/assessment/aggregation.ts` deduplicates findings within variants and targets, derives completion and health, computes scores, and creates the report summary.

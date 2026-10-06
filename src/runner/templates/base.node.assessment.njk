@@ -6,7 +6,7 @@ const emit = (event) => console.log(`${EVENT_PREFIX}${JSON.stringify(event)}`);
 
 Sentry.init({
   dsn: process.env.SENTRY_DSN,
-  sendDefaultPii: true,
+  sendDefaultPii: {% if detectability %}process.env.SENTRY_ASSESSMENT_SEND_DEFAULT_PII !== "0"{% else %}true{% endif %},
   tracesSampleRate: 1.0,
   streamGenAiSpans: true,
 });
@@ -31,7 +31,7 @@ async function runAssessmentCall(probe, request, callback) {
     },
 {% if providerTruth %}
     async (span) => {
-      await markProviderCall(request.assessmentCallId, "start");
+      await markProviderCall(request.assessmentCallId, "start"{% if detectability %}, probe.input.fault?.providerFault{% endif %});
       try {
         return await callback(span);
       } finally {
@@ -47,10 +47,14 @@ async function runAssessmentCall(probe, request, callback) {
 
 // Provider-truth call markers: exchanges recorded between start and end belong
 // to this call. Tracing is suppressed so markers never create spans.
-async function markProviderCall(callId, phase) {
+async function markProviderCall(callId, phase{% if detectability %}, fault{% endif %}) {
   const url = process.env.SENTRY_ASSESSMENT_PROVIDER_TRUTH_URL;
   if (!url) return;
+{% if detectability %}
+  const query = new URLSearchParams({ id: callId, phase, ...(fault ? { fault } : {}) });
+{% else %}
   const query = new URLSearchParams({ id: callId, phase });
+{% endif %}
   try {
     await Sentry.suppressTracing(() =>
       fetch(`${url}/_call?${query}`, { method: "POST" }).then((response) => response.text()),
@@ -59,6 +63,52 @@ async function markProviderCall(callId, phase) {
     console.error(`Provider-truth call marker failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
+{% endif %}
+{% if detectability %}
+
+// Failure injection (--detectability). The program's own log is the ground
+// truth: which tools ran with which arguments, the answer, and how the run ended.
+const FAULT_PROBE_PREFIX = "agent.fault.";
+const SEND_DEFAULT_PII = process.env.SENTRY_ASSESSMENT_SEND_DEFAULT_PII !== "0";
+
+function stableJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+function emitAgentLog(probe, request, toolLog, { answer, error, stepLimit = false } = {}) {
+  const event = {
+    type: "agent_log",
+    probeId: probe.id,
+    callId: request.assessmentCallId,
+    tools: toolLog,
+    sendDefaultPii: SEND_DEFAULT_PII,
+    timestamp: new Date().toISOString(),
+  };
+  if (typeof answer === "string") event.answer = answer;
+  if (error !== undefined || stepLimit) {
+    event.error = {
+      type: error === undefined ? "StepLimit" : (error?.constructor?.name ?? "Error"),
+      message: error === undefined ? "" : String(error instanceof Error ? error.message : error).slice(0, 500),
+      stepLimit,
+    };
+  }
+  emit(event);
+}
+
+// Log the call, then return the probe's fixed result as a successful value.
+function faultToolHandler(definition, toolLog) {
+  return async (args) => {
+    toolLog.push({ name: definition.name, arguments: stableJson(args ?? {}) });
+    return typeof definition.result === "string" ? definition.result : JSON.stringify(definition.result);
+  };
+}
+
+let runFaultCall;
+{% block fault_call %}{% endblock %}
 {% endif %}
 
 async function flushSentry(probeId) {
@@ -97,6 +147,15 @@ async function runAssessment() {
           },
         },
         async () => {
+{% if detectability %}
+          if (probe.id.startsWith(FAULT_PROBE_PREFIX)) {
+            if (!runFaultCall) throw new Error("This adapter does not implement failure injection.");
+            for (const request of probe.input.calls) {
+              await runAssessmentCall(probe, request, () => runFaultCall(probe, request));
+            }
+            return;
+          }
+{% endif %}
 {% block probe %}
           throw new Error("Assessment adapter does not implement this probe.");
 {% endblock %}

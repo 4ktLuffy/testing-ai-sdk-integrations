@@ -26,6 +26,9 @@ export interface ProviderTruth {
 	responseId?: string;
 	finishReason?: string;
 	terminalEvent?: string;
+	incompleteReason?: string;
+	/** The response asked for tool calls (set only when true). */
+	toolCalls?: boolean;
 }
 
 const responsesTerminalEvents = new Set([
@@ -155,6 +158,13 @@ function chatStreamTruth(raw: string): ProviderTruth {
 		for (const choice of Array.isArray(chunk.choices) ? chunk.choices : []) {
 			if (isRecord(choice)) {
 				truth.finishReason = text(choice.finish_reason) ?? truth.finishReason;
+				if (
+					isRecord(choice.delta) &&
+					Array.isArray(choice.delta.tool_calls) &&
+					choice.delta.tool_calls.length > 0
+				) {
+					truth.toolCalls = true;
+				}
 			}
 		}
 		const usage = isRecord(chunk.usage)
@@ -170,6 +180,7 @@ function chatStreamTruth(raw: string): ProviderTruth {
 
 function chatTruth(body: JsonRecord): ProviderTruth {
 	const choice = Array.isArray(body.choices) ? body.choices[0] : undefined;
+	const message = isRecord(choice) ? choice.message : undefined;
 	return {
 		api: "chat",
 		streaming: false,
@@ -177,6 +188,11 @@ function chatTruth(body: JsonRecord): ProviderTruth {
 		model: text(body.model),
 		responseId: text(body.id),
 		finishReason: isRecord(choice) ? text(choice.finish_reason) : undefined,
+		...(isRecord(message) &&
+		Array.isArray(message.tool_calls) &&
+		message.tool_calls.length > 0
+			? { toolCalls: true }
+			: {}),
 	};
 }
 
@@ -194,6 +210,16 @@ function responseObjectTruth(
 		model: text(response.model),
 		responseId: text(response.id),
 		terminalEvent,
+		...(Array.isArray(response.output) &&
+		response.output.some(
+			(item) => isRecord(item) && item.type === "function_call",
+		)
+			? { toolCalls: true }
+			: {}),
+		...(isRecord(response.incomplete_details) &&
+		text(response.incomplete_details.reason)
+			? { incompleteReason: text(response.incomplete_details.reason) }
+			: {}),
 	};
 }
 
@@ -306,6 +332,9 @@ export function summarizeExchange(
 		sequence: exchange.sequence,
 		path: exchange.path,
 		status: exchange.status,
+		...(exchange.injectedFault
+			? { injectedFault: exchange.injectedFault }
+			: {}),
 	};
 	if (!truth) return summary;
 	return Object.fromEntries(

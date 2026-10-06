@@ -10,6 +10,66 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 {% endblock %}
 
+{% block fault_call %}
+{% if provider != "anthropic" %}
+from langchain_core.tools import StructuredTool
+from langgraph.errors import GraphRecursionError
+
+# create_react_agent answers with this message instead of raising when the
+# remaining steps cannot fit another tool round.
+REMAINING_STEPS_MESSAGE = "Sorry, need more steps to process this request."
+
+
+async def run_fault_call(probe, request):
+    fault = probe["input"]["fault"]
+    tool_log = []
+
+    def fault_tool(definition):
+        handle = fault_tool_handler(definition, tool_log)
+
+        def invoke(**arguments):
+            return handle(arguments)
+
+        async def ainvoke(**arguments):
+            return handle(arguments)
+
+        return StructuredTool.from_function(
+            func=invoke,
+            coroutine=ainvoke,
+            name=definition["name"],
+            description=definition["description"],
+            args_schema=definition["parameters"],
+        )
+
+    llm = ChatOpenAI(
+        model=request["model"],
+        api_key=os.environ["OPENROUTER_API_KEY"],
+        base_url={% if providerTruth %}os.environ.get("SENTRY_ASSESSMENT_OPENROUTER_BASE") or {% endif %}"https://openrouter.ai/api/v1",
+        max_retries=fault.get("maxRetries", 2),
+        max_tokens=fault.get("maxOutputTokens"),
+    )
+    agent = create_react_agent(llm, tools=[fault_tool(definition) for definition in probe["input"].get("tools", [])], name="assessment-agent")
+    messages = [HumanMessage(content=request["messages"][-1]["content"])]
+    # Each model call is one agent step plus one tool step.
+    config = {"recursion_limit": 2 * fault["maxModelCalls"]}
+    try:
+{% if isAsync %}
+        state = await agent.ainvoke({"messages": messages}, config)
+{% else %}
+        state = agent.invoke({"messages": messages}, config)
+{% endif %}
+    except GraphRecursionError as error:
+        emit_agent_log(probe, request, tool_log, error=error, step_limit=True)
+        return
+    except Exception as error:
+        emit_agent_log(probe, request, tool_log, error=error)
+        return
+    answer = state["messages"][-1].content
+    answer = answer if isinstance(answer, str) else json.dumps(answer)
+    emit_agent_log(probe, request, tool_log, answer=answer, step_limit=answer == REMAINING_STEPS_MESSAGE)
+{% endif %}
+{% endblock %}
+
 {% block probe %}
                 for request in probe["input"]["calls"]:
                     with assessment_call(probe, request):
@@ -22,7 +82,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
     {% if provider == "anthropic" %}
                         llm = ChatAnthropic(model=request["model"], api_key=os.environ["OPENROUTER_API_KEY"], base_url="https://openrouter.ai/api")
     {% else %}
-                        llm = ChatOpenAI(model=request["model"], api_key=os.environ["OPENROUTER_API_KEY"], base_url="https://openrouter.ai/api/v1")
+                        llm = ChatOpenAI(model=request["model"], api_key=os.environ["OPENROUTER_API_KEY"], base_url={% if providerTruth %}os.environ.get("SENTRY_ASSESSMENT_OPENROUTER_BASE") or {% endif %}"https://openrouter.ai/api/v1")
     {% endif %}
                         try:
                             agent = create_react_agent(llm, tools=[])

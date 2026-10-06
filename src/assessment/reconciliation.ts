@@ -62,7 +62,9 @@ export function reconcileExecution(
 
 	const byProbe = new Map(probes.map((probe) => [probe.probeId, probe]));
 	for (const event of protocol.events) {
-		if (event.type === "assessment_finished") continue;
+		if (event.type === "assessment_finished" || event.type === "agent_log") {
+			continue;
+		}
 		if (event.type === "runtime_failure") {
 			failures.push(event.failure);
 			continue;

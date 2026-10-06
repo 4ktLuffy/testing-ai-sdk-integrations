@@ -4,9 +4,57 @@
 from openai import AsyncOpenAI
 from agents import Agent, Runner, set_default_openai_client
 set_default_openai_client(
-    AsyncOpenAI(api_key=os.environ["OPENROUTER_API_KEY"], base_url="https://openrouter.ai/api/v1"),
+    AsyncOpenAI(api_key=os.environ["OPENROUTER_API_KEY"], base_url={% if providerTruth %}os.environ.get("SENTRY_ASSESSMENT_OPENROUTER_BASE") or {% endif %}"https://openrouter.ai/api/v1"),
     use_for_tracing=False,
 )
+{% endblock %}
+
+{% block fault_call %}
+from agents import FunctionTool, ModelSettings, OpenAIResponsesModel
+from agents.exceptions import MaxTurnsExceeded
+
+
+async def run_fault_call(probe, request):
+    fault = probe["input"]["fault"]
+    tool_log = []
+
+    def fault_tool(definition):
+        handle = fault_tool_handler(definition, tool_log)
+
+        async def invoke(_context, arguments):
+            return handle(json.loads(arguments or "{}"))
+
+        return FunctionTool(
+            name=definition["name"],
+            description=definition["description"],
+            params_json_schema=definition["parameters"],
+            on_invoke_tool=invoke,
+            strict_json_schema=False,
+        )
+
+    client = AsyncOpenAI(
+        api_key=os.environ["OPENROUTER_API_KEY"],
+        base_url={% if providerTruth %}os.environ.get("SENTRY_ASSESSMENT_OPENROUTER_BASE") or {% endif %}"https://openrouter.ai/api/v1",
+        max_retries=fault.get("maxRetries", 2),
+    )
+    agent = Agent(
+        name="assessment-agent",
+        instructions="Use the tools to answer. Be brief.",
+        model=OpenAIResponsesModel(model=request["model"], openai_client=client),
+        model_settings=ModelSettings(max_tokens=fault.get("maxOutputTokens")),
+        tools=[fault_tool(definition) for definition in probe["input"].get("tools", [])],
+    )
+    prompt = request["messages"][-1]["content"]
+    try:
+        result = await Runner.run(agent, input=prompt, max_turns=fault["maxModelCalls"])
+    except MaxTurnsExceeded as error:
+        emit_agent_log(probe, request, tool_log, error=error, step_limit=True)
+        return
+    except Exception as error:
+        emit_agent_log(probe, request, tool_log, error=error)
+        return
+    output = result.final_output
+    emit_agent_log(probe, request, tool_log, answer=output if isinstance(output, str) else json.dumps(output))
 {% endblock %}
 
 {% block probe %}

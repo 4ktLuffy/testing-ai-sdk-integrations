@@ -11,7 +11,66 @@ const { createAnthropic } = await import("@ai-sdk/anthropic");
 const provider = createAnthropic({ apiKey: process.env.OPENROUTER_API_KEY, baseURL: "https://openrouter.ai/api/v1" });
 {% else %}
 const { createOpenAI } = await import("@ai-sdk/openai");
-const provider = createOpenAI({ apiKey: process.env.OPENROUTER_API_KEY, baseURL: "https://openrouter.ai/api/v1" });
+const provider = createOpenAI({ apiKey: process.env.OPENROUTER_API_KEY, baseURL: {% if providerTruth %}process.env.SENTRY_ASSESSMENT_OPENROUTER_BASE || {% endif %}"https://openrouter.ai/api/v1" });
+{% endif %}
+{% endblock %}
+
+{% block fault_call %}
+{% if provider != "anthropic" %}
+runFaultCall = async (probe, request) => {
+  const fault = probe.input.fault;
+  const toolLog = [];
+  const faultTools = Object.fromEntries((probe.input.tools ?? []).map((definition) => [
+    definition.name,
+    tool({
+      description: definition.description,
+      inputSchema: jsonSchema(definition.parameters),
+      execute: faultToolHandler(definition, toolLog),
+    }),
+  ]));
+  const prompt = request.messages.at(-1).content;
+  const settings = {
+    model: provider(request.model),
+    instructions: "Use the tools to answer. Be brief.",
+    tools: faultTools,
+    stopWhen: isStepCount(fault.maxModelCalls),
+    maxRetries: fault.maxRetries ?? 2,
+    ...(fault.maxOutputTokens ? { maxOutputTokens: fault.maxOutputTokens } : {}),
+    // Data collection follows sendDefaultPii; no explicit opt-in beyond it.
+    telemetry: { isEnabled: true, functionId: probe.id, ...(SEND_DEFAULT_PII ? { recordInputs: true, recordOutputs: true } : {}) },
+  };
+  let answer;
+  try {
+{% if agentStyle == "class" %}
+    const { model, instructions, ...rest } = settings;
+    const agent = new ToolLoopAgent({ model, instructions, ...rest });
+    if (request.streaming) {
+      const response = await agent.stream({ prompt });
+      for await (const _chunk of response.textStream) {
+        // Consume the response to complete the instrumented operation.
+      }
+      answer = await response.text;
+    } else {
+      answer = (await agent.generate({ prompt })).text;
+    }
+{% else %}
+    const { instructions, ...rest } = settings;
+    if (request.streaming) {
+      const response = streamText({ ...rest, system: instructions, prompt });
+      for await (const _chunk of response.textStream) {
+        // Consume the response to complete the instrumented operation.
+      }
+      answer = await response.text;
+    } else {
+      answer = (await generateText({ ...rest, system: instructions, prompt })).text;
+    }
+{% endif %}
+  } catch (error) {
+    emitAgentLog(probe, request, toolLog, { error });
+    return;
+  }
+  emitAgentLog(probe, request, toolLog, { answer });
+};
 {% endif %}
 {% endblock %}
 

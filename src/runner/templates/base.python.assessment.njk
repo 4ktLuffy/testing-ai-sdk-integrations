@@ -22,7 +22,7 @@ def emit(event):
 sentry_sdk.init(
     dsn=os.environ.get("SENTRY_DSN"),
     traces_sample_rate=1.0,
-    send_default_pii=True,
+    send_default_pii={% if detectability %}os.environ.get("SENTRY_ASSESSMENT_SEND_DEFAULT_PII", "1") != "0"{% else %}True{% endif %},
     stream_gen_ai_spans=True,
 )
 {% endblock %}
@@ -33,7 +33,7 @@ PROBES = json.loads(r'''{{ probes | tojson }}''')
 {% if providerTruth %}
 
 
-def mark_provider_call(call_id, phase):
+def mark_provider_call(call_id, phase{% if detectability %}, fault=None{% endif %}):
     # Provider-truth call markers: exchanges recorded between start and end
     # belong to this call. A raw socket keeps the marker invisible to the SDK's
     # HTTP instrumentation, so markers never create spans.
@@ -41,7 +41,11 @@ def mark_provider_call(call_id, phase):
     if not url:
         return
     target = urllib.parse.urlsplit(url)
+{% if detectability %}
+    query = urllib.parse.urlencode({"id": call_id, "phase": phase, **({"fault": fault} if fault else {})})
+{% else %}
     query = urllib.parse.urlencode({"id": call_id, "phase": phase})
+{% endif %}
     request = (
         f"POST {target.path}/_call?{query} HTTP/1.1\r\n"
         f"Host: {target.netloc}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
@@ -53,6 +57,47 @@ def mark_provider_call(call_id, phase):
                 pass
     except Exception as error:
         print(f"Provider-truth call marker failed: {error}", flush=True)
+{% endif %}
+{% if detectability %}
+
+
+# Failure injection (--detectability). The program's own log is the ground
+# truth: which tools ran with which arguments, the answer, and how the run ended.
+FAULT_PROBE_PREFIX = "agent.fault."
+SEND_DEFAULT_PII = os.environ.get("SENTRY_ASSESSMENT_SEND_DEFAULT_PII", "1") != "0"
+
+
+def emit_agent_log(probe, request, tool_log, answer=None, error=None, step_limit=False):
+    event = {
+        "type": "agent_log",
+        "probeId": probe["id"],
+        "callId": request["assessmentCallId"],
+        "tools": tool_log,
+        "sendDefaultPii": SEND_DEFAULT_PII,
+    }
+    if isinstance(answer, str):
+        event["answer"] = answer
+    if error is not None or step_limit:
+        event["error"] = {
+            "type": type(error).__name__ if error is not None else "StepLimit",
+            "message": str(error)[:500] if error is not None else "",
+            "stepLimit": step_limit,
+        }
+    emit(event)
+
+
+def fault_tool_handler(definition, tool_log):
+    # Log the call, then return the probe's fixed result as a successful value.
+    def handle(arguments):
+        tool_log.append({"name": definition["name"], "arguments": json.dumps(arguments, sort_keys=True)})
+        result = definition.get("result")
+        return result if isinstance(result, str) else json.dumps(result)
+
+    return handle
+
+
+run_fault_call = None
+{% block fault_call %}{% endblock %}
 {% endif %}
 
 
@@ -67,7 +112,7 @@ def assessment_call(probe, request):
         span.set_data("test.call.id", call_id)
         span.set_data("test.call.mode", call_mode)
 {% if providerTruth %}
-        mark_provider_call(call_id, "start")
+        mark_provider_call(call_id, "start"{% if detectability %}, (probe["input"].get("fault") or {}).get("providerFault"){% endif %})
         try:
             yield
         finally:
@@ -118,6 +163,15 @@ async def run_assessment():
                 span.set_data("test.assessment.id", "{{ targetId }}")
                 span.set_data("test.variant.id", "{{ variantId }}")
                 span.set_data("test.probe.id", probe["id"])
+{% if detectability %}
+                if probe["id"].startswith(FAULT_PROBE_PREFIX):
+                    if run_fault_call is None:
+                        raise RuntimeError("This adapter does not implement failure injection.")
+                    for request in probe["input"]["calls"]:
+                        with assessment_call(probe, request):
+                            await run_fault_call(probe, request)
+                    probe = {**probe, "input": {**probe["input"], "calls": []}}
+{% endif %}
 {% block probe %}
                 raise RuntimeError("Assessment adapter does not implement this probe")
 {% endblock %}

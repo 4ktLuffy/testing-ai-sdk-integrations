@@ -8,6 +8,7 @@ import {
 } from "../evaluation/evaluators/models.js";
 import { evaluateProviderTruth } from "../evaluation/evaluators/provider-truth.js";
 import { evaluateClientSpans } from "../evaluation/evaluators/spans.js";
+import { evaluateDetectability } from "../evaluation/evaluators/detectability.js";
 import {
 	evaluateConventions,
 	evaluateProbeTelemetry,
@@ -15,12 +16,15 @@ import {
 } from "../evaluation/evaluators/telemetry.js";
 import { isClientSpan } from "../evaluation/evaluators/telemetry-shared.js";
 import { findingFromObservation } from "../evaluation/findings.js";
-import { getProbeInputs } from "../probes/inputs.js";
+import { getProbeInputs, type AgentProbeInput } from "../probes/inputs.js";
+import { isFaultProbe } from "./catalog.js";
 import { finalizeVariant } from "./aggregation.js";
 import type { ResolvedVariant } from "./matrix.js";
 import { partitionSpansByProbe } from "./partition.js";
 import type {
+	AgentRunLog,
 	AssessmentCategory,
+	DetectabilityResult,
 	Finding,
 	Observation,
 	ProbeResult,
@@ -40,6 +44,8 @@ export interface VariantEvaluationInput {
 	generatedProgramPath?: string;
 	logPath?: string;
 	providerCalls?: ProviderCallSummary[];
+	/** Failure-injection run logs; present only with `--detectability`. */
+	agentLogs?: AgentRunLog[];
 }
 
 function shouldEvaluate(probe: ProbeResult): boolean {
@@ -124,8 +130,31 @@ export function evaluateVariant(
 	input: VariantEvaluationInput,
 ): VariantAssessment {
 	const partition = partitionSpansByProbe(input.spans);
+	// Failure-injection probes are evaluated only for detectability: the
+	// standard evaluators assume a healthy run.
+	const detectability: DetectabilityResult[] = [];
+	const detectabilityObservations = input.probes
+		.filter((probe) => isFaultProbe(probe.probeId))
+		.flatMap((probe) => {
+			if (!shouldEvaluate(probe) || !input.agentLogs) return [];
+			const evaluation = evaluateDetectability(
+				probe,
+				input.variant.id,
+				partition.byProbe.get(probe.probeId) ?? [],
+				getProbeInputs(input.category)[probe.probeId] as
+					| AgentProbeInput
+					| undefined,
+				input.agentLogs,
+				input.providerCalls ?? [],
+			);
+			detectability.push(...evaluation.results);
+			return evaluation.observations;
+		});
 	const observations = [
-		...input.probes.flatMap((probe) =>
+		...detectabilityObservations,
+		...input.probes
+			.filter((probe) => !isFaultProbe(probe.probeId))
+			.flatMap((probe) =>
 			observationsForProbe(
 				probe,
 				input.variant,
@@ -155,6 +184,7 @@ export function evaluateVariant(
 			runtimeFailures: input.runtimeFailures,
 			spans: input.spans,
 			...(input.providerCalls ? { providerCalls: input.providerCalls } : {}),
+			...(input.agentLogs ? { agentLogs: input.agentLogs, detectability } : {}),
 			generatedProgramPath: input.generatedProgramPath,
 			logPath: input.logPath,
 		},

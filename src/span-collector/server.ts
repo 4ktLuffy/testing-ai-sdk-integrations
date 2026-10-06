@@ -22,6 +22,8 @@ export interface SpanCollectorOptions {
 	providerTruth?: boolean;
 	providerUpstreams?: Readonly<Record<string, string>>;
 	fetchUpstream?: typeof fetch;
+	/** Allow scripted provider faults requested by call markers (`--detectability`). */
+	providerFaults?: boolean;
 }
 
 export class SpanCollector {
@@ -44,6 +46,7 @@ export class SpanCollector {
 				(projectId) => this.projectIdToRunId.get(projectId),
 				options.providerUpstreams ?? providerUpstreamsFromEnvironment(),
 				options.fetchUpstream,
+				options.providerFaults,
 			);
 		}
 		this.app = this.createApp();

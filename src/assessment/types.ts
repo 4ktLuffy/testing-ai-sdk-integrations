@@ -136,6 +136,56 @@ export interface ProviderExchangeSummary {
 	responseId?: string;
 	finishReason?: string;
 	terminalEvent?: string;
+	/** Responses API `incomplete_details.reason`, e.g. max_output_tokens. */
+	incompleteReason?: string;
+	/** The response asked for tool calls. */
+	toolCalls?: boolean;
+	/** Set when the recorder served a scripted fault instead of the upstream. */
+	injectedFault?: string;
+}
+
+/**
+ * What an assessment program observed during one failure-injection call, from
+ * its own bookkeeping: the tools it ran, the answer it got, and how the run
+ * ended. This, plus recorded provider exchanges, is the ground truth for
+ * detectability; Sentry spans are never used to label a run.
+ */
+export interface AgentRunLog {
+	probeId: string;
+	callId: string;
+	tools: Array<{ name: string; arguments: string }>;
+	/** Final answer text; undefined when the run produced none. */
+	answer?: string;
+	/** The run raised; `stepLimit` marks the framework's own step/turn limit. */
+	error?: { type: string; message: string; stepLimit?: boolean };
+	/** Whether the program sent default PII (prompts, tool I/O) to Sentry. */
+	sendDefaultPii?: boolean;
+}
+
+export type DetectabilityVerdict =
+	| "detectable"
+	| "undetectable"
+	| "false_alarm"
+	| "not_triggered"
+	| "not_applicable";
+
+/** Detectability of one injected failure in one assessment call. */
+export interface DetectabilityResult {
+	probeId: string;
+	callId: string;
+	callMode?: "blocking" | "streaming";
+	/** The class judged here, or "control" for a quiet healthy run. */
+	failureClass: string;
+	/** Whether this class is the one the probe injected. */
+	injected: boolean;
+	/** What actually happened, labelled from the program log and provider exchanges. */
+	label: string;
+	verdict: DetectabilityVerdict;
+	/** Detector kinds that fired on this call's spans. */
+	detections: string[];
+	/** Why Sentry's telemetry was insufficient, one stable reason ID each. */
+	reasons: Array<{ id: string; detail: string }>;
+	sendDefaultPii?: boolean;
 }
 
 /** Provider exchanges observed between the start and end markers of one assessment call. */
@@ -160,6 +210,8 @@ export interface VariantAssessment {
 	runtimeFailures: RuntimeFailure[];
 	spans: CapturedSpan[];
 	providerCalls?: ProviderCallSummary[];
+	agentLogs?: AgentRunLog[];
+	detectability?: DetectabilityResult[];
 	generatedProgramPath?: string;
 	logPath?: string;
 }

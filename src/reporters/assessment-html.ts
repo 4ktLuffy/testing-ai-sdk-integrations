@@ -12,6 +12,10 @@ import type {
 	VariantAssessment,
 } from "../assessment/types.js";
 import type { CapturedSpan } from "../assessment/types.js";
+import {
+	renderDetectabilityHtml,
+	reportDetectabilityMatrix,
+} from "./detectability-matrix.js";
 
 function escapeHtml(value: unknown): string {
 	return String(value)
@@ -577,7 +581,7 @@ export function renderAssessmentHtml(
 <main class="main"><div class="toolbar"><input id="search" type="search" aria-label="search integrations" placeholder="Search for framework platform option or version."><span class="summary-stat summary-variants"><small>variants</small><strong id="summary-variants">${report.summary.variants}</strong></span><span class="summary-stat summary-findings"><small>findings</small><strong id="summary-findings">${findings}</strong></span><span class="summary-stat summary-score"><small>score</small><strong id="summary-score">${overallScore}</strong></span></div>
 ${scoreExplanation(report.scoringVersion)}
 <section class="trend-panel"><div class="trend-heading"><strong>score trend</strong><small id="trend-runs"></small></div><svg id="overall-trend" viewBox="0 0 1000 190" role="img" aria-label="overall score trend"></svg><span id="trend-tooltip" class="trend-tooltip" role="tooltip" hidden></span></section>
-<div class="table-shell"><table class="matrix"><thead><tr><th>platform</th><th>versions</th><th>variants</th><th>findings</th><th>score</th><th>trend</th></tr></thead>${rows.join("")}</table></div><p class="empty">generated ${escapeHtml(report.generatedAt)} · assessment wall time ${escapeHtml(formatDuration(report.durationMs))}</p></main>
+<div class="table-shell"><table class="matrix"><thead><tr><th>platform</th><th>versions</th><th>variants</th><th>findings</th><th>score</th><th>trend</th></tr></thead>${rows.join("")}</table></div>${renderDetectabilityHtml(reportDetectabilityMatrix(report))}<p class="empty">generated ${escapeHtml(report.generatedAt)} · assessment wall time ${escapeHtml(formatDuration(report.durationMs))}</p></main>
 <script>
 const currentTrendEntry=${scriptJson(currentTrendEntry)};
 const rows=[...document.querySelectorAll('.target-row')];const groups=[...document.querySelectorAll('[data-framework-group]')];

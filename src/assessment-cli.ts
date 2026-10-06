@@ -6,11 +6,16 @@ import {
 	aggregateTarget,
 	AssessmentExecutor,
 	createReport,
+	detectabilityApplies,
 	getProbeCatalog,
 	resolveVariants,
 	toAssessmentTargetConfig,
 	writeAssessmentProgram,
 } from "./assessment/index.js";
+import {
+	renderDetectabilityMarkdown,
+	reportDetectabilityMatrix,
+} from "./reporters/detectability-matrix.js";
 import type {
 	AssessmentCategory,
 	AssessmentPlatform,
@@ -51,6 +56,9 @@ Options:
   --provider-truth <mode>      record: proxy provider calls through the collector
                                and compare spans with provider-reported usage
                                (default: off)
+  --detectability              Add agent failure-injection probes and report
+                               whether captured telemetry can detect each
+                               failure (requires --provider-truth record)
   --parallel, -j <N>           Run variants in parallel (default: 10; explicit minimum: 20)
   --open                       Open the generated dashboard
   --verbose, -v               Show variant execution progress
@@ -71,6 +79,7 @@ interface CliOptions {
 	sentryJavaScriptPath?: string;
 	quick: boolean;
 	providerTruth: boolean;
+	detectability: boolean;
 	parallel: number;
 	open: boolean;
 	verbose: boolean;
@@ -104,6 +113,21 @@ function providerTruthVariant(variant: ResolvedVariant): ResolvedVariant {
 		...variant,
 		modelOverrides: { ...variant.modelOverrides, request: model },
 	};
+}
+
+/**
+ * Detectability labels runs from provider exchanges and injects provider faults
+ * through the recorder, so it needs provider-truth recording.
+ */
+function parseDetectability(
+	value: boolean | undefined,
+	providerTruth: string | undefined,
+): boolean {
+	if (!value) return false;
+	if (providerTruth !== "record") {
+		throw new Error("--detectability requires --provider-truth record.");
+	}
+	return true;
 }
 
 function parseOptions(values: string[] | undefined): Record<string, string> {
@@ -190,6 +214,7 @@ function parseCommand(): CliOptions {
 			"sentry-javascript": { type: "string" },
 			quick: { type: "boolean", default: false },
 			"provider-truth": { type: "string" },
+			detectability: { type: "boolean", default: false },
 			parallel: { type: "string", short: "j" },
 			open: { type: "boolean", default: false },
 			verbose: { type: "boolean", short: "v", default: false },
@@ -216,6 +241,10 @@ function parseCommand(): CliOptions {
 		sentryJavaScriptPath: values["sentry-javascript"],
 		quick: values.quick,
 		providerTruth: parseProviderTruth(values["provider-truth"]),
+		detectability: parseDetectability(
+			values.detectability,
+			values["provider-truth"],
+		),
 		parallel: parseParallel(values.parallel),
 		open: values.open,
 		verbose: values.verbose,
@@ -301,7 +330,12 @@ function resolveWork(options: CliOptions): TargetWork[] {
 
 		if (
 			options.probeIds &&
-			!getProbeCatalog(framework.category as AssessmentCategory).some((probe) =>
+			!getProbeCatalog(framework.category as AssessmentCategory, {
+				detectability: detectabilityApplies(
+					framework.platform,
+					options.detectability,
+				),
+			}).some((probe) =>
 				options.probeIds?.has(probe.id),
 			)
 		) {
@@ -384,6 +418,7 @@ async function main() {
 				const output = await writeAssessmentProgram(target, variant, {
 					probeIds: options.probeIds,
 					providerTruth: options.providerTruth,
+					detectability: options.detectability,
 				});
 				console.log(output.programPath);
 				rendered++;
@@ -396,6 +431,7 @@ async function main() {
 	const startedAt = Date.now();
 	const collector = new SpanCollector(0, {
 		providerTruth: options.providerTruth,
+		providerFaults: options.detectability,
 	});
 	await collector.start();
 	try {
@@ -411,6 +447,7 @@ async function main() {
 					const assessment = await executor.execute(framework, variant, {
 						probeIds: options.probeIds,
 						providerTruth: options.providerTruth,
+						detectability: options.detectability,
 					});
 					if (options.verbose) {
 						console.log(
@@ -451,6 +488,13 @@ async function main() {
 		console.log(
 			`Overview: ${integrationScore}/100 · ${targets.length} integrations · ${report.summary.incomplete} incomplete variants`,
 		);
+		if (options.detectability) {
+			const matrix = reportDetectabilityMatrix(report);
+			if (matrix.length > 0) {
+				console.log("\nFailure detectability:");
+				console.log(renderDetectabilityMarkdown(matrix));
+			}
+		}
 		if (options.open) openReport(htmlPath);
 		if (report.summary.incomplete > 0) process.exitCode = 1;
 	} finally {

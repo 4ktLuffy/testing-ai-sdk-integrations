@@ -75,3 +75,23 @@ for (const platform of ["node", "nextjs", "cloudflare", "python"]) {
 		});
 	}
 }
+
+for (const [template, extra] of [
+	["agents/python/openai-agents/assessment.njk", { isAsync: true }],
+	["agents/python/pydantic-ai/assessment.njk", { isAsync: true, modelSetup: "single" }],
+	["agents/python/langgraph/assessment.njk", { isAsync: false, provider: "openai" }],
+	["agents/node/langgraph/assessment.njk", { provider: "openai" }],
+	["agents/node/vercel/assessment.njk", { provider: "openai", agentStyle: "class", platform: "node", baseTemplate: "base.node.assessment.njk" }],
+] as const) {
+	test(`renders failure injection for ${template} only when enabled`, () => {
+		const context = { targetId: "target", variantId: "variant", probes: [], ...extra };
+		const off = renderTemplate(template, { ...context, providerTruth: true });
+		const on = renderTemplate(template, { ...context, providerTruth: true, detectability: true });
+		for (const marker of ["agent_log", "FAULT_PROBE_PREFIX", "SENTRY_ASSESSMENT_SEND_DEFAULT_PII", "providerFault"]) {
+			assert.equal(off.includes(marker), false, `${marker} rendered when off`);
+			assert.ok(on.includes(marker), `${marker} missing when on`);
+		}
+		assert.match(on, /run_fault_call|runFaultCall = async/);
+		assert.match(on, /SENTRY_ASSESSMENT_OPENROUTER_BASE/);
+	});
+}
