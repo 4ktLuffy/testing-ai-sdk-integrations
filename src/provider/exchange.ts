@@ -37,6 +37,10 @@ const responseHeaderAllowList = new Set([
 	"x-request-id",
 	"request-id",
 	"openai-processing-ms",
+	// Retry-controlling headers: SDKs decide whether and when to retry from these.
+	"x-should-retry",
+	"retry-after",
+	"retry-after-ms",
 ]);
 
 const sensitiveQueryParameter = /key|token|secret|auth|signature|sig$/i;

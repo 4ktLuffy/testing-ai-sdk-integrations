@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { ResolvedVariant } from "../assessment/matrix.js";
 import type { ProviderExchange } from "./exchange.js";
@@ -24,6 +24,39 @@ export interface CassetteSpec {
 export function fingerprint(value: unknown): string {
 	return createHash("sha256").update(typeof value === "string" ? value : JSON.stringify(value)).digest("hex");
 }
+/**
+ * Content of a template and everything it inherits from or includes, so that an
+ * edit to a base or shared template invalidates cassettes. A dynamic reference
+ * (`{% extends baseTemplate %}`) cannot be resolved statically; it conservatively
+ * pulls in every base and shared template.
+ */
+export async function templateClosure(root: string, templatePath: string): Promise<string> {
+	const seen = new Map<string, string>();
+	const walk = async (relative: string): Promise<void> => {
+		if (seen.has(relative)) return;
+		const text = await readFile(path.join(root, relative), "utf8");
+		seen.set(relative, text);
+		for (const match of text.matchAll(/\{%-?\s*(?:extends|include|import|from)\s+("[^"]+"|'[^']+'|[^\s%]+)/g)) {
+			const reference = match[1];
+			if (/^["']/.test(reference)) { await walk(reference.slice(1, -1)); continue; }
+			for (const candidate of await sharedTemplates(root)) await walk(candidate);
+		}
+	};
+	await walk(templatePath);
+	return [...seen.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([name, text]) => `${name}\n${text}`).join("\n\u0000\n");
+}
+async function sharedTemplates(root: string): Promise<string[]> {
+	const found: string[] = [];
+	const visit = async (relative: string): Promise<void> => {
+		for (const entry of await readdir(path.join(root, relative), { withFileTypes: true })) {
+			const child = path.posix.join(relative, entry.name);
+			if (entry.isDirectory() && (relative !== "" || entry.name === "shared")) await visit(child);
+			else if (entry.isFile() && entry.name.endsWith(".njk") && (relative !== "" ? relative.startsWith("shared") : entry.name.startsWith("base."))) found.push(child);
+		}
+	};
+	await visit("");
+	return found;
+}
 export function cassettePath(root: string, variant: ResolvedVariant, probeId: string): string {
 	const optionsKey = [`framework=${encodeURIComponent(variant.identity.frameworkVersion)}`,
 		...Object.entries(variant.identity.options).sort(([a], [b]) => a.localeCompare(b))
@@ -39,6 +72,19 @@ export function sanitizedUpstreams(upstreams: Readonly<Record<string, string>>):
 		url.hash = "";
 		return [name, url.toString()];
 	}));
+}
+/**
+ * A recording may replace a cassette only when it is complete and healthy:
+ * every in-flight exchange finished draining, none errored, and every call
+ * ended in a success. Retried attempts (429, 5xx) are kept so replay reproduces
+ * the SDK's retry path, but a call whose last attempt failed means a throttled
+ * or broken run, which must never overwrite a good cassette.
+ */
+export function recordingIsComplete(exchanges: readonly ProviderExchange[], settled: boolean): boolean {
+	if (!settled || exchanges.length === 0 || exchanges.some((exchange) => exchange.error || !exchange.callId)) return false;
+	const last = new Map<string, ProviderExchange>();
+	for (const exchange of [...exchanges].sort((a, b) => a.sequence - b.sequence)) last.set(exchange.callId!, exchange);
+	return [...last.values()].every((exchange) => exchange.status >= 200 && exchange.status < 300);
 }
 export async function writeCassette(spec: CassetteSpec, exchanges: ProviderExchange[]): Promise<void> {
 	const safe = exchanges.map((exchange) => {
@@ -105,6 +151,8 @@ export function canonicalRequest(exchange: Pick<ProviderExchange, "method" | "pa
 			const content = message.content ?? message.parts;
 			return Array.isArray(content) ? content.length : content === undefined ? 0 : 1;
 		}) : [],
+		roles: Array.isArray(messages) ? messages.map((value: unknown) => object(value).role ?? object(value).type ?? null) : [],
+		continuation: body.previous_response_id !== undefined && body.previous_response_id !== null,
 		tools: tools.map((tool: unknown) => object(tool).name ?? object(tool).type).sort(),
 	};
 }

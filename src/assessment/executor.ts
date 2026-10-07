@@ -1,8 +1,8 @@
 import { fileURLToPath } from "node:url";
-import { cassettePath, fingerprint, sanitizedUpstreams, writeCassette, type CassetteSpec, type ProviderTruthMode } from "../provider/cassette.js";
+import { cassettePath, fingerprint, recordingIsComplete, sanitizedUpstreams, templateClosure, writeCassette, type CassetteSpec, type ProviderTruthMode } from "../provider/cassette.js";
 import { providerUpstreamsFromEnvironment } from "../span-collector/provider-recorder.js";
 import { renderAssessmentProgram } from "./program-renderer.js";
-import { readFile, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { getProbeCatalog } from "./catalog.js";
 import { toAssessmentTargetConfig } from "./discovery.js";
@@ -141,7 +141,7 @@ export class AssessmentExecutor {
 			const specs: Record<string, CassetteSpec> = {};
 			if (options.providerTruth) {
 				const rendered = renderAssessmentProgram(target, variant, options.probeIds);
-				const template = await readFile(fileURLToPath(new URL(`../runner/templates/${rendered.templatePath}`, import.meta.url)), "utf8");
+				const template = await templateClosure(fileURLToPath(new URL("../runner/templates/", import.meta.url)), rendered.templatePath);
 				for (const [probeId, probeFingerprint] of Object.entries(rendered.probeFingerprints)) {
 					specs[probeId] = { file: cassettePath(options.cassetteRoot ?? "cassettes", variant, probeId), header: {
 						cassette: 1, probeFingerprint, templateHash: fingerprint(template), recordedAt: new Date().toISOString(),
@@ -211,7 +211,7 @@ export class AssessmentExecutor {
 					const exchanges = this.collector.getProviderExchanges(variant.id);
 					for (const [probeId, spec] of Object.entries(specs)) {
 						const selected = exchanges.filter((exchange) => exchange.callId?.split(":", 1)[0] === probeId);
-						if (selected.length && selected.every((exchange) => !exchange.error)) await writeCassette(spec, selected);
+						if (recordingIsComplete(selected, recorded.settled)) await writeCassette(spec, selected);
 					}
 				}
 			}
@@ -256,9 +256,10 @@ export class AssessmentExecutor {
 	private async recordProviderTruth(
 		runId: string,
 		workDir: string,
-	): Promise<{ calls: ProviderCallSummary[]; failures: RuntimeFailure[] }> {
+	): Promise<{ calls: ProviderCallSummary[]; failures: RuntimeFailure[]; settled: boolean }> {
 		const failures: RuntimeFailure[] = [];
-		if (!(await this.collector.settleProviderExchanges(runId))) {
+		const settled = await this.collector.settleProviderExchanges(runId);
+		if (!settled) {
 			failures.push(
 				runtimeFailure(
 					"collector",
@@ -283,6 +284,6 @@ export class AssessmentExecutor {
 				),
 			);
 		}
-		return { calls, failures };
+		return { calls, failures, settled };
 	}
 }

@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { Hono } from "hono";
-import { cassettePath, fingerprint, readCassette, writeCassette, sanitizedUpstreams, requestMatch, type CassetteSpec } from "./cassette.js";
+import { cassettePath, fingerprint, recordingIsComplete, templateClosure, readCassette, writeCassette, sanitizedUpstreams, requestMatch, type CassetteSpec } from "./cassette.js";
 import type { ProviderExchange } from "./exchange.js";
 import { ProviderRecorder } from "../span-collector/provider-recorder.js";
 import { SpanCollector } from "../span-collector/server.js";
@@ -202,4 +202,65 @@ test("recording to cassette and replay preserves raw bytes and redacts wire cred
 		assert.deepEqual(Buffer.from(await response.arrayBuffer()), Buffer.concat(bytes));
 		assert.equal(context.forwarded(), 0);
 	});
+});
+
+test("a recording replaces a cassette only when every call finished and ended in success", () => {
+	const ok = exchange();
+	assert.equal(recordingIsComplete([ok], true), true);
+	// Retried attempts are kept: the call still ended in a success.
+	assert.equal(recordingIsComplete([exchange({ sequence: 0, status: 429 }), exchange({ sequence: 1 })], true), true);
+	// Negative controls: each of these used to be written over a good cassette.
+	assert.equal(recordingIsComplete([ok], false), false, "recordings still draining");
+	assert.equal(recordingIsComplete([exchange({ status: 503 })], true), false, "call ended in a failure");
+	assert.equal(recordingIsComplete([exchange({ sequence: 0 }), exchange({ sequence: 1, status: 429 })], true), false, "last attempt throttled");
+	assert.equal(recordingIsComplete([exchange({ error: "boom" })], true), false);
+	assert.equal(recordingIsComplete([exchange({ callId: undefined })], true), false);
+	assert.equal(recordingIsComplete([], true), false);
+});
+
+test("replay matching treats roles and response continuation as wire invariants", () => {
+	const base = exchange();
+	const swapped = { ...request, messages: [{ role: "assistant", content: "hello" }] };
+	assert.equal(requestMatch(base, exchange({ requestBody: JSON.stringify(swapped) })), "mismatch");
+	const responses = exchange({ path: "/responses", requestBody: JSON.stringify({ model: "m", input: [{ role: "user", content: "hi" }] }) });
+	const chained = exchange({ path: "/responses", requestBody: JSON.stringify({ model: "m", input: [{ role: "user", content: "hi" }], previous_response_id: "resp_1" }) });
+	assert.equal(requestMatch(responses, chained), "mismatch");
+	assert.equal(requestMatch(chained, chained), "match");
+	// Same roles, different text stays drift.
+	assert.equal(requestMatch(base, exchange({ requestBody: JSON.stringify({ ...request, messages: [{ role: "user", content: "bye" }] }) })), "drift");
+});
+
+test("replay serves retry-controlling headers from the cassette", async () => {
+	await fixture(async (spec) => {
+		const stored = exchange({ status: 429, responseHeaders: { "content-type": "application/json", "x-should-retry": "false", "retry-after": "7" } });
+		await writeCassette(spec, [stored, exchange({ sequence: 1 })]);
+		const response = await (await replay(spec)).send();
+		assert.equal(response.status, 429);
+		assert.equal(response.headers.get("x-should-retry"), "false");
+		assert.equal(response.headers.get("retry-after"), "7");
+	});
+});
+
+test("template fingerprint covers inherited base and shared templates, not unrelated ones", async () => {
+	const root = await mkdtemp(path.join(process.cwd(), ".template-test-"));
+	try {
+		await mkdir(path.join(root, "shared"), { recursive: true });
+		await mkdir(path.join(root, "llm"), { recursive: true });
+		await writeFile(path.join(root, "base.node.njk"), "base v1");
+		await writeFile(path.join(root, "shared", "helper.njk"), "helper v1");
+		await writeFile(path.join(root, "unrelated.njk"), "unrelated v1");
+		await writeFile(path.join(root, "llm", "leaf.njk"), '{% extends "base.node.njk" %}{% include "shared/helper.njk" %}');
+		await writeFile(path.join(root, "llm", "dynamic.njk"), "{% extends baseTemplate %}");
+		const leaf = () => templateClosure(root, "llm/leaf.njk");
+		const dynamic = () => templateClosure(root, "llm/dynamic.njk");
+		const [leaf1, dynamic1] = [await leaf(), await dynamic()];
+		await writeFile(path.join(root, "unrelated.njk"), "unrelated v2");
+		assert.equal(await leaf(), leaf1);
+		await writeFile(path.join(root, "base.node.njk"), "base v2");
+		assert.notEqual(fingerprint(await leaf()), fingerprint(leaf1), "edited base template must invalidate");
+		assert.notEqual(fingerprint(await dynamic()), fingerprint(dynamic1), "dynamic extends must invalidate on any base edit");
+		const leaf2 = await leaf();
+		await writeFile(path.join(root, "shared", "helper.njk"), "helper v2");
+		assert.notEqual(await leaf(), leaf2, "edited shared template must invalidate");
+	} finally { await rm(root, { recursive: true, force: true }); }
 });
