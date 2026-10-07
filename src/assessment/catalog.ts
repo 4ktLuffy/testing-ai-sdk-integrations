@@ -110,7 +110,11 @@ export const FAULT_PROBE_PREFIX = "agent.fault.";
 export function detectabilityApplies(
 	platform: string,
 	detectability: boolean | undefined,
+	variantOptions?: Readonly<Record<string, string>>,
 ): boolean {
+	// The agent fault call is not implemented for Anthropic-provider variants:
+	// scheduling fault probes there would run nothing and report noise.
+	if (variantOptions?.provider === "anthropic") return false;
 	return Boolean(detectability) && (platform === "node" || platform === "python");
 }
 

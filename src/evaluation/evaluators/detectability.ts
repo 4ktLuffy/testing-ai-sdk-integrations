@@ -785,13 +785,9 @@ export function evaluateDetectability(
 			}
 		}
 		if (!injected && judged.size === 0) {
-			record(
-				"control",
-				"not_applicable",
-				notTriggeredLabel(undefined, log, call, input),
-				[],
-				"healthy",
-			);
+			// A control run that errored or gave no answer proves nothing: not healthy.
+			const label = notTriggeredLabel(undefined, log, call, input);
+			record("control", "not_applicable", label, [], label === "healthy" ? "healthy" : "blocked");
 		}
 	}
 	return { observations, results };

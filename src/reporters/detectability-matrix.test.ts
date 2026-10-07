@@ -94,3 +94,26 @@ test("Node AI data-collection mode splits rows and labels them", () => {
 	// Results without the field keep the old label.
 	assert.match(markdown, /send_default_pii on\) \| 1 \|/);
 });
+
+test("failed control runs are excluded from the quiet count, never reported as healthy", () => {
+	const control = (callId: string, label: string) =>
+		result({ probeId: "agent.fault.control", callId, failureClass: "control", verdict: "not_applicable", label });
+	const failedOnly = buildDetectabilityMatrix([
+		variant("python/agents/x/framework=1", [control("agent.fault.control:blocking:0", "run_error:RateLimitError")]),
+	])[0].cells.control;
+	assert.equal(failedOnly.status, "not_applicable");
+	assert.match(failedOnly.text, /no healthy control run: 1 failed control run\(s\) excluded \(run_error:RateLimitError\)/);
+	const mixed = buildDetectabilityMatrix([
+		variant("python/agents/x/framework=1", [
+			control("agent.fault.control:blocking:0", "healthy"),
+			control("agent.fault.control:streaming:0", "no_answer"),
+		]),
+	])[0].cells.control;
+	assert.equal(mixed.status, "quiet");
+	assert.equal(mixed.text, "quiet 1/1; 1 failed control run(s) excluded (no_answer)");
+	// Negative control: an all-healthy control is unchanged.
+	const healthy = buildDetectabilityMatrix([
+		variant("python/agents/x/framework=1", [control("agent.fault.control:blocking:0", "healthy")]),
+	])[0].cells.control;
+	assert.equal(healthy.text, "quiet 1/1");
+});

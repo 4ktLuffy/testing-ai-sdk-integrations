@@ -32,6 +32,7 @@ export function renderAssessmentProgram(
 	const detectability = detectabilityApplies(
 		target.platform,
 		options.detectability,
+		variant.identity.options,
 	);
 	const probes = getProbeCatalog(target.category, { detectability }).flatMap(
 		(probe) => {

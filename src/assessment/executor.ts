@@ -52,9 +52,10 @@ function initialProbes(
 	framework: DiscoveredFramework,
 	probeIds?: ReadonlySet<string>,
 	detectability?: boolean,
+	variantOptions?: Readonly<Record<string, string>>,
 ): ProbeResult[] {
 	return getProbeCatalog(framework.category as "llm" | "agents", {
-		detectability: detectabilityApplies(framework.platform, detectability),
+		detectability: detectabilityApplies(framework.platform, detectability, variantOptions),
 	}).flatMap(
 		(probe) => {
 			if (probeIds && !probeIds.has(probe.id)) return [];
@@ -121,6 +122,7 @@ export class AssessmentExecutor {
 			framework,
 			options.probeIds,
 			options.detectability,
+			variant.identity.options,
 		);
 		const failures: RuntimeFailure[] = [];
 		let generatedProgramPath: string | undefined;

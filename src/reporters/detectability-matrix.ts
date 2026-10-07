@@ -142,7 +142,7 @@ function targetParts(variantId: string): { platform: string; framework: string }
 export function buildDetectabilityMatrix(
 	variants: readonly VariantAssessment[],
 ): MatrixRow[] {
-	const rows = new Map<string, MatrixRow & { controlRuns: number }>();
+	const rows = new Map<string, MatrixRow & { controlRuns: number; controlFailed: Record<string, number> }>();
 	for (const variant of variants) {
 		if (!variant.detectability || variant.detectability.length === 0) continue;
 		const byMode = new Map<string, DetectabilityResult[]>();
@@ -170,13 +170,24 @@ export function buildDetectabilityMatrix(
 						MATRIX_COLUMNS.map((column) => [column, emptyCell()]),
 					) as Record<MatrixColumn, MatrixCell>,
 					controlRuns: 0,
-				} as MatrixRow & { controlRuns: number });
+					controlFailed: {},
+				} as MatrixRow & { controlRuns: number; controlFailed: Record<string, number> });
 			// Each variant assessment is one execution; call IDs repeat across executions.
 			const runIds = new Set<string>();
 			const controlIds = new Set<string>();
+			// A control run that errored or gave no answer is not a healthy run: it
+			// says nothing about false alarms, so it must not count as "quiet".
+			const failedControls = new Map<string, string>();
+			for (const result of results) {
+				if (result.probeId === "agent.fault.control" && (result.label === "no_answer" || result.label.startsWith("run_error:"))) {
+					failedControls.set(result.callId, result.label);
+				}
+			}
+			for (const label of failedControls.values()) bump(row.controlFailed, label);
 			for (const result of results) {
 				runIds.add(result.callId);
 				const isControl = result.probeId === "agent.fault.control";
+				if (isControl && failedControls.has(result.callId)) continue;
 				if (isControl) controlIds.add(result.callId);
 				if (isControl && result.verdict === "false_alarm") {
 					const cell = row.cells.control;
@@ -219,9 +230,15 @@ export function buildDetectabilityMatrix(
 		}
 	}
 	return [...rows.values()]
-		.map(({ controlRuns, ...row }) => {
+		.map(({ controlRuns, controlFailed, ...row }) => {
 			for (const column of MATRIX_COLUMNS) {
 				finishCell(row.cells[column], column, column === "control" ? controlRuns : row.runs);
+			}
+			if (Object.keys(controlFailed).length > 0) {
+				const control = row.cells.control;
+				const failed = `${Object.values(controlFailed).reduce((sum, n) => sum + n, 0)} failed control run(s) excluded (${counted(controlFailed)})`;
+				if (controlRuns === 0) control.status = "not_applicable";
+				control.text = control.text && control.text !== "n/a" ? `${control.text}; ${failed}` : `no healthy control run: ${failed}`;
 			}
 			return row;
 		})

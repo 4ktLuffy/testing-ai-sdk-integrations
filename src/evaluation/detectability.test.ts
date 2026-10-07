@@ -247,3 +247,15 @@ test("a silent tool error that did not happen reports the data that would be nee
 	assert.deepEqual(silent?.reasons.map((reason) => reason.id), ["tool.result_missing", "answer.missing"]);
 	assert.equal(findingFromObservation(result.observations[0]), undefined);
 });
+
+test("a control run that errored is not recorded as healthy", () => {
+	const failed = evaluate(
+		"agent.fault.control",
+		[span("gen_ai.invoke_agent", "ag", `${parent}control:blocking:0`, { "gen_ai.agent.name": "a" })],
+		{ tools: [], error: { type: "RateLimitError", message: "429" } } as Omit<AgentRunLog, "probeId" | "callId">,
+		exchanges({ status: 429 }),
+	);
+	assert.equal(failed.results[0].failureClass, "control");
+	assert.equal(failed.results[0].label, "run_error:RateLimitError");
+	assert.notEqual(failed.observations[0].state, "healthy");
+});
