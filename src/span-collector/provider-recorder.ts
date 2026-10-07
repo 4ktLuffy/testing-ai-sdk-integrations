@@ -69,8 +69,27 @@ async function drain(stream: ReadableStream<Uint8Array>): Promise<string> {
 	return Buffer.concat(chunks).toString("utf8");
 }
 
-function errorMessage(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
+/**
+ * Error text (notably fetch's TypeError) can quote the full target URL, which
+ * carries query-string keys and userinfo. Strip those before the text reaches
+ * a recording, a cassette or the client.
+ */
+function errorMessage(error: unknown, target?: string): string {
+	let text = error instanceof Error ? error.message : String(error);
+	if (target) {
+		text = text.split(target).join("[upstream url]");
+		try {
+			const parsed = new URL(target);
+			for (const secret of [parsed.password, parsed.username, ...parsed.searchParams.values()]) {
+				if (secret) text = text.split(secret).join("[redacted]");
+			}
+		} catch {
+			// Unparsable target: the pattern backstop below still applies.
+		}
+	}
+	return text
+		.replace(/(\/\/)[^/\s@"']*@/g, "$1[redacted]@")
+		.replace(/\?[^\s"')]*/g, "?[redacted]");
 }
 
 export class ProviderRecorder {
@@ -206,7 +225,7 @@ export class ProviderRecorder {
 				redirect: "manual",
 			});
 		} catch (error) {
-			exchange.error = `Provider upstream request failed: ${errorMessage(error)}`;
+			exchange.error = `Provider upstream request failed: ${errorMessage(error, target)}`;
 			this.store(runId, exchange);
 			return context.json({ error: exchange.error }, 502);
 		}

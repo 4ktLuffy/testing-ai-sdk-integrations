@@ -5,6 +5,7 @@ import test from "node:test";
 import { Hono } from "hono";
 import { ProviderRecorder, defaultProviderUpstreams, providerUpstreamsFromEnvironment } from "./provider-recorder.js";
 import { SpanCollector } from "./server.js";
+import { recordedResponseHeaders } from "../provider/exchange.js";
 
 const secrets = {
 	authorization: "Bearer sk-test-authorization-secret",
@@ -267,4 +268,48 @@ test("upstream overrides replace only the named route", () => {
 	});
 	assert.equal(both.openrouter, "http://127.0.0.1:1/v1");
 	assert.equal(both.google, "http://127.0.0.1:2");
+});
+
+for (const [name, upstreams, upstream, leaked] of [
+	["credentials in the upstream base", { openrouter: "https://user:test-userinfo-secret@example.invalid/api/v1" }, "openrouter", ["test-userinfo-secret"]],
+	["a key query parameter and an unparsable upstream base", { google: "generativelanguage.googleapis.com" }, "google", [secrets.query]],
+] as const) {
+	test(`upstream request errors do not leak ${name}`, async () => {
+		// Real fetch: its TypeError messages quote the full target URL.
+		const recorder = new ProviderRecorder(() => "run", upstreams);
+		recorder.registerRun("run");
+		const app = new Hono();
+		app.all("/provider/:projectId/:upstream/*", (context) => recorder.handleProxy(context));
+		const response = await app.request(`/provider/1/${upstream}/v1beta/models/m:generateContent?key=${secrets.query}&alt=sse`, {
+			method: "POST",
+			headers: { authorization: secrets.authorization, "content-type": "application/json" },
+			body: "{}",
+		});
+		// Negative control: the failure is still reported, to the client and in the recording.
+		assert.equal(response.status, 502);
+		const body = await response.text();
+		const [stored] = recorder.getExchanges("run");
+		assert.match(stored.error ?? "", /^Provider upstream request failed: \S/);
+		assert.match(body, /Provider upstream request failed/);
+		for (const secret of [...leaked, secrets.query, secrets.authorization]) {
+			assert.equal(body.includes(secret), false, `response leaked ${secret}`);
+			assert.equal(JSON.stringify(stored).includes(secret), false, `recording leaked ${secret}`);
+		}
+	});
+}
+
+test("recorded response headers keep retry-controlling headers and still drop others", () => {
+	const recorded = recordedResponseHeaders(new Headers({
+		"x-should-retry": "false",
+		"retry-after": "7",
+		"retry-after-ms": "7000",
+		"set-cookie": "session=secret",
+		"content-type": "application/json",
+	}));
+	assert.deepEqual(recorded, {
+		"x-should-retry": "false",
+		"retry-after": "7",
+		"retry-after-ms": "7000",
+		"content-type": "application/json",
+	});
 });
